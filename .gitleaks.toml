@@ -1,0 +1,26 @@
+# gitleaks config: the default rule set plus the credentials this project
+# specifically must never see in a commit.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''\b\d{8,10}:[A-Za-z0-9_-]{35}\b'''
+tags = ["telegram", "token"]
+
+[[rules]]
+id = "netscape-cookie-jar"
+description = "Netscape cookies.txt export"
+regex = '''(?i)^#\s*(Netscape\s+)?HTTP\s+Cookie\s+File'''
+tags = ["cookies", "session"]
+
+[[rules]]
+id = "google-session-cookie"
+description = "Google login session cookie"
+regex = '''\b(SID|HSID|SSID|APISID|SAPISID|__Secure-1PSID|__Secure-3PSID)\b\s+\S{20,}'''
+tags = ["cookies", "session"]
+
+[allowlist]
+description = "Documented placeholders"
+paths = ['''\.env\.example$''', '''\.gitleaks\.toml$''', '''CHAPTERCUT_SPEC\.md$''']

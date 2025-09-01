@@ -1,0 +1,40 @@
+services:
+  bot-api:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
+      TELEGRAM_LOCAL: 1
+    # Same uid as the bot so both can read and write the shared volume.
+    user: "10001:10001"
+    volumes:
+      - data:/data
+      - botapi:/var/lib/telegram-bot-api
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - bot-api
+    user: "10001:10001"
+    volumes:
+      - data:/data
+    healthcheck:
+      # The bot touches /data/heartbeat every 30 s; stale means wedged.
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /data/heartbeat) )) -lt 120"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  data: {}
+  botapi: {}
