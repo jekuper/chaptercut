@@ -16,6 +16,11 @@ def dict_list(value: object) -> list[dict[str, Any]]:
     return items
 
 
+def as_dict(value: object) -> dict[str, Any]:
+    """`value` as a string-keyed dict, or an empty one if it is anything else."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
 def as_float(value: object) -> float | None:
     if isinstance(value, bool):
         return None
