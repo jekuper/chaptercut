@@ -7,7 +7,8 @@ import re
 # 11-char base64url video id.
 _ID = r"(?P<id>[A-Za-z0-9_-]{11})"
 
-_HOST = r"(?:https?://)?(?:[a-z0-9-]+\.)*"
+# The lookbehind stops "notyoutube.com" from matching on its "youtube.com" tail.
+_HOST = r"(?<![\w.-])(?:https?://)?(?:[a-z0-9-]+\.)*"
 
 _PATTERNS = [
     re.compile(rf"{_HOST}youtube\.com/watch\?(?:[^\s]*&)?v={_ID}", re.IGNORECASE),

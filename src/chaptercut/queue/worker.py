@@ -8,6 +8,7 @@ every path, which is what the predecessor's success-only cleanup did not do.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 
 from aiogram import Bot
@@ -87,6 +88,10 @@ class Worker:
     async def _loop(self) -> None:
         log.info("worker.started")
         while not self._stopping:
+            # Cleared before the claim, not after: a wake that lands while we
+            # are claiming must survive into the wait below, or the job sits
+            # in the queue until the fallback poll fires.
+            self._wakeup.clear()
             job = await self.repo.claim_next()
             if job is None:
                 await self._idle()
@@ -95,11 +100,8 @@ class Worker:
         log.info("worker.stopped")
 
     async def _idle(self) -> None:
-        self._wakeup.clear()
-        try:
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._wakeup.wait(), timeout=IDLE_POLL_SECONDS)
-        except TimeoutError:
-            return
 
     async def _run_job(self, job: Job) -> None:
         self._current = job
