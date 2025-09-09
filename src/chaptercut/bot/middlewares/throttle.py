@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject, Update, User
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from chaptercut.bot import texts
+from chaptercut.bot.middlewares.common import inner_event, user_of
 from chaptercut.logging import get_logger
 
 log = get_logger(__name__)
@@ -50,9 +51,9 @@ class ThrottleMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        inner: TelegramObject = event.event if isinstance(event, Update) else event
-        user = getattr(inner, "from_user", None)
-        if not isinstance(user, User):
+        inner = inner_event(event)
+        user = user_of(event)
+        if user is None:
             return await handler(event, data)
 
         if self._allow(user.id, time.monotonic()):

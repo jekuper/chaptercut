@@ -8,19 +8,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject, Update, User
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from chaptercut.bot import texts
+from chaptercut.bot.middlewares.common import inner_event, user_of
 from chaptercut.logging import get_logger
 from chaptercut.settings import Settings
 
 log = get_logger(__name__)
-
-
-def _user_of(event: TelegramObject) -> User | None:
-    inner: TelegramObject = event.event if isinstance(event, Update) else event
-    user = getattr(inner, "from_user", None)
-    return user if isinstance(user, User) else None
 
 
 class AuthMiddleware(BaseMiddleware):
@@ -33,7 +28,7 @@ class AuthMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        user = _user_of(event)
+        user = user_of(event)
         if user is None:
             return None
         if not self.settings.is_allowed(user.id):
@@ -44,7 +39,7 @@ class AuthMiddleware(BaseMiddleware):
         return await handler(event, data)
 
     async def _reject(self, event: TelegramObject) -> None:
-        inner = event.event if isinstance(event, Update) else event
+        inner = inner_event(event)
         if isinstance(inner, Message):
             await inner.answer(texts.PRIVATE)
         elif isinstance(inner, CallbackQuery):
