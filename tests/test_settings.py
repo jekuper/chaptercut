@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chaptercut.settings import Settings
+from chaptercut.settings import Settings, load_settings
 from tests.conftest import FAKE_TOKEN
 
 
@@ -110,3 +110,46 @@ def test_present_cookie_file_is_returned(tmp_path: Path) -> None:
 
 def test_token_is_not_in_the_repr() -> None:
     assert FAKE_TOKEN not in repr(build())
+
+
+def test_ids_load_from_the_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # pydantic-settings json-decodes list fields by default, which turned a
+    # single id like CC_ALLOWED_USER_IDS=111 into an int and failed validation.
+    monkeypatch.setenv("CC_BOT_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("CC_ALLOWED_USER_IDS", "111")
+    monkeypatch.setenv("CC_ADMIN_USER_IDS", "111")
+    monkeypatch.setenv("CC_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings()
+
+    assert settings.allowed_user_ids == [111]
+    assert settings.admin_user_ids == [111]
+
+
+def test_multiple_ids_load_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CC_BOT_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("CC_ALLOWED_USER_IDS", "111,222,333")
+    monkeypatch.setenv("CC_ADMIN_USER_IDS", "111")
+    monkeypatch.setenv("CC_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    assert load_settings().allowed_user_ids == [111, 222, 333]
+
+
+def test_an_empty_admin_list_loads_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CC_BOT_TOKEN", FAKE_TOKEN)
+    monkeypatch.setenv("CC_ALLOWED_USER_IDS", "111")
+    monkeypatch.setenv("CC_ADMIN_USER_IDS", "")
+    monkeypatch.setenv("CC_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    assert load_settings().admin_user_ids == []
+
+
+def test_a_single_int_is_accepted_directly() -> None:
+    assert build(allowed_user_ids=111, admin_user_ids=111).allowed_user_ids == [111]

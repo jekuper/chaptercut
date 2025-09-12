@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 TOKEN_RE = re.compile(r"^\d{8,10}:[A-Za-z0-9_-]{35}$")
 
@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     bot_api_url: str = "http://bot-api:8081"
     bot_api_local: bool = True
 
-    allowed_user_ids: Annotated[list[int], Field(min_length=1)]
-    admin_user_ids: list[int] = []
+    allowed_user_ids: Annotated[list[int], NoDecode, Field(min_length=1)]
+    admin_user_ids: Annotated[list[int], NoDecode] = []
 
     data_dir: Path = Path("/data")
     cookies_file: Path | None = None
@@ -54,10 +54,14 @@ class Settings(BaseSettings):
     @field_validator("allowed_user_ids", "admin_user_ids", mode="before")
     @classmethod
     def _parse_ids(cls, value: object) -> list[int]:
+        # NoDecode keeps env values as raw strings; direct construction may
+        # still pass a list, and a single int is accepted for convenience.
         if value is None:
             return []
         if isinstance(value, str):
             return [int(part) for part in value.replace(";", ",").split(",") if part.strip()]
+        if isinstance(value, int) and not isinstance(value, bool):
+            return [value]
         if isinstance(value, list):
             return [int(item) for item in cast(list[Any], value)]
         raise TypeError("user id list must be a comma-separated string or a list of ints")
