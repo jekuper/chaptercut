@@ -8,12 +8,18 @@ id = "telegram-bot-token"
 description = "Telegram bot token"
 regex = '''\b\d{8,10}:[A-Za-z0-9_-]{35}\b'''
 tags = ["telegram", "token"]
+  [rules.allowlist]
+  description = "Synthetic fixture tokens: the id half is placeholder digits"
+  regexes = ['''\b123456789:[A-Za-z0-9_-]{35}\b''']
 
 [[rules]]
 id = "netscape-cookie-jar"
 description = "Netscape cookies.txt export"
 regex = '''(?i)^#\s*(Netscape\s+)?HTTP\s+Cookie\s+File'''
 tags = ["cookies", "session"]
+  [rules.allowlist]
+  description = "Tests write a synthetic cookie jar to check it is never echoed back"
+  paths = ['''^tests/''']
 
 [[rules]]
 id = "google-session-cookie"
