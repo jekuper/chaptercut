@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     cookies_file: Path | None = None
 
+    # Empty means every provider the build knows about.
+    enabled_providers: Annotated[list[str], NoDecode] = []
+
     ytdlp_extra_args: str = ""
 
     audio_bitrate: str = ""
@@ -65,6 +68,17 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [int(item) for item in cast(list[Any], value)]
         raise TypeError("user id list must be a comma-separated string or a list of ints")
+
+    @field_validator("enabled_providers", mode="before")
+    @classmethod
+    def _parse_providers(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [part.strip().lower() for part in value.split(",") if part.strip()]
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in cast(list[Any], value) if str(item)]
+        raise TypeError("enabled providers must be a comma-separated string or a list")
 
     @field_validator("bot_token")
     @classmethod

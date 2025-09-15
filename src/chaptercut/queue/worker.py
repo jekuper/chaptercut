@@ -162,7 +162,7 @@ class Worker:
     async def _record_cache(self, result: AudioResult) -> None:
         size = sum(path.stat().st_size for path in result.tracks if path.is_file())
         if result.from_cache:
-            await self.repo.touch_cache_entry(result.video_id)
+            await self.repo.touch_cache_entry(result.key)
         else:
             await self.repo.record_cache_entry(result.manifest, size)
         await self._evict_if_needed()
@@ -170,15 +170,15 @@ class Worker:
     async def _evict_if_needed(self) -> None:
         if await self.repo.cache_total_bytes() <= self.settings.cache_max_bytes:
             return
-        order = [str(row["video_id"]) for row in await self.repo.cache_entries_by_age()]
-        for video_id in self.pipeline.evict_to_fit(order):
-            await self.repo.forget_cache_entry(video_id)
+        for key in self.pipeline.evict_to_fit(await self.repo.cache_keys_by_age()):
+            await self.repo.forget_cache_entry(key)
 
     async def _fail(self, job: Job, exc: Exception, status: StatusMessage | None) -> None:
         reason = _reason_for(exc)
         log.warning(
             "job.failed",
             job_id=job.job_id,
+            provider=job.provider,
             video_id=job.video_id,
             error=type(exc).__name__,
             reason=reason,

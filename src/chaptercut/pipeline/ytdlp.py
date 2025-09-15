@@ -17,6 +17,7 @@ from typing import Any
 
 from chaptercut.logging import get_logger
 from chaptercut.pipeline.process import ProcessError, run_checked, stream_lines
+from chaptercut.providers.base import Provider
 from chaptercut.util.jsonish import as_float, as_int, as_str, dict_list
 
 log = get_logger(__name__)
@@ -163,6 +164,42 @@ class VideoInfo:
             return best[1]
         fallback = self.raw.get("thumbnail")
         return fallback if isinstance(fallback, str) else None
+
+
+class YtdlpFactory:
+    """Builds a configured `Ytdlp` per provider.
+
+    Cookie jars are per-site: `cookies-<provider>.txt` in the data directory
+    wins, falling back to the shared `CC_COOKIES_FILE`. That way adding a
+    provider that needs its own login is a file drop, not a config change.
+    """
+
+    def __init__(
+        self,
+        data_dir: Path,
+        default_cookies: Path | None = None,
+        extra_args: Sequence[str] = (),
+        binary: str = "yt-dlp",
+    ) -> None:
+        self.data_dir = data_dir
+        self.default_cookies = default_cookies
+        self.extra_args = list(extra_args)
+        self.binary = binary
+
+    def cookies_for(self, provider: str) -> Path | None:
+        specific = self.data_dir / f"cookies-{provider}.txt"
+        if specific.is_file():
+            return specific
+        if self.default_cookies is not None and self.default_cookies.is_file():
+            return self.default_cookies
+        return None
+
+    def for_provider(self, provider: Provider) -> Ytdlp:
+        return Ytdlp(
+            binary=self.binary,
+            cookies_file=self.cookies_for(provider.name),
+            extra_args=[*self.extra_args, *provider.ytdlp_args],
+        )
 
 
 class Ytdlp:

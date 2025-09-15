@@ -9,6 +9,7 @@ import pytest
 from aiogram.types import FSInputFile
 
 from chaptercut.bot.deliver import Delivery, TooLargeError
+from chaptercut.cache.store import CacheKey
 from chaptercut.pipeline.runner import AudioResult, VideoResult
 from tests.conftest import make_manifest
 
@@ -62,6 +63,7 @@ def audio_result(tmp_path: Path, tracks: int, with_zip: bool, size: int = 1024) 
         cover=cover,
         zip_path=zip_path,
         from_cache=False,
+        key=CacheKey("youtube", "dQw4w9WgXcQ"),
     )
 
 

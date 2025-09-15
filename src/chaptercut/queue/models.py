@@ -51,6 +51,7 @@ class Request:
     user_id: int
     chat_id: int
     url: str
+    provider: str
     video_id: str
     created_at: datetime
     expires_at: datetime
@@ -82,6 +83,7 @@ class Request:
             user_id=int(row["user_id"]),
             chat_id=int(row["chat_id"]),
             url=str(row["url"]),
+            provider=str(row["provider"]),
             video_id=str(row["video_id"]),
             extract_type=ExtractType(raw_type) if raw_type else None,
             formats_json=row["formats_json"],
@@ -97,6 +99,7 @@ class Job:
     user_id: int
     chat_id: int
     kind: ExtractType
+    provider: str
     video_id: str
     url: str
     state: JobState
@@ -120,6 +123,7 @@ class Job:
             chat_id=int(row["chat_id"]),
             status_msg_id=row["status_msg_id"],
             kind=ExtractType(row["kind"]),
+            provider=str(row["provider"]),
             video_id=str(row["video_id"]),
             url=str(row["url"]),
             format_id=row["format_id"],

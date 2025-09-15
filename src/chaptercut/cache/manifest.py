@@ -7,7 +7,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-SCHEMA_VERSION = 1
+# v2 added `provider`. Entries written by v1 fail validation and are swept,
+# which is the intended upgrade path: they would only be re-downloaded.
+SCHEMA_VERSION = 2
 MANIFEST_NAME = "manifest.json"
 
 
@@ -21,6 +23,7 @@ class ManifestTrack(BaseModel):
 
 class Manifest(BaseModel):
     schema_version: int = Field(default=SCHEMA_VERSION, alias="schema")
+    provider: str
     video_id: str
     url: str
     title: str

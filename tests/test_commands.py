@@ -18,17 +18,20 @@ from chaptercut.bot.routers.commands import (
     cmd_start,
     cmd_status,
 )
-from chaptercut.cache.store import CacheStore
+from chaptercut.cache.store import CacheKey, CacheStore
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.models import ExtractType, Job, JobState, Phase
 from chaptercut.queue.repository import Repository
-from chaptercut.settings import Settings
 from chaptercut.util.timefmt import utcnow
-from tests.conftest import make_manifest, populate_cache_dir
+from tests.conftest import make_manifest, populate_cache_dir, youtube_ref
 
 USER = 111
 OTHER = 222
 CHAT = 999
 VIDEO_ID = "dQw4w9WgXcQ"
+TIKTOK_ID = "7123456789012345678"
+KEY = CacheKey("youtube", VIDEO_ID)
+TIKTOK_KEY = CacheKey("tiktok", TIKTOK_ID)
 
 
 @pytest.fixture
@@ -63,17 +66,29 @@ class FakeWorker:
 
 
 class FakeYtdlp:
+    """Stands in for the factory and the client it hands back."""
+
+    def __init__(self, cookies: dict[str, Path] | None = None) -> None:
+        self.cookies = cookies or {}
+
+    def for_provider(self, provider: Any) -> FakeYtdlp:
+        return self
+
+    def cookies_for(self, provider: str) -> Path | None:
+        return self.cookies.get(provider)
+
     async def version(self) -> str:
         return "2026.08.19"
 
 
-def a_job(user_id: int = USER) -> Job:
+def a_job(user_id: int = USER, provider: str = "youtube") -> Job:
     return Job(
         job_id="job1",
         req_id="req1",
         user_id=user_id,
         chat_id=CHAT,
         kind=ExtractType.AUDIO,
+        provider=provider,
         video_id=VIDEO_ID,
         url="https://youtu.be/x",
         state=JobState.RUNNING,
@@ -88,41 +103,57 @@ def command(args: str | None) -> CommandObject:
 
 async def test_start(replies: list[str]) -> None:
     await cmd_start(a_message())
-    assert "Send me a YouTube link" in replies[0]
+    assert "Send me a link" in replies[0]
 
 
-async def test_help_hides_the_admin_commands(replies: list[str]) -> None:
-    await cmd_help(a_message(), is_admin=False)
+async def test_help_hides_the_admin_commands(
+    replies: list[str], registry: ProviderRegistry
+) -> None:
+    await cmd_help(a_message(), registry, is_admin=False)
     assert "/cache" not in replies[0]
 
 
-async def test_help_shows_the_admin_commands_to_an_admin(replies: list[str]) -> None:
-    await cmd_help(a_message(), is_admin=True)
+async def test_help_shows_the_admin_commands_to_an_admin(
+    replies: list[str], registry: ProviderRegistry
+) -> None:
+    await cmd_help(a_message(), registry, is_admin=True)
     assert "/cache" in replies[0]
     assert "/cookies" in replies[0]
 
 
+async def test_help_lists_the_enabled_sites(replies: list[str], registry: ProviderRegistry) -> None:
+    await cmd_help(a_message(), registry)
+    assert "YouTube, TikTok" in replies[0]
+
+
+async def test_help_reflects_a_restricted_registry(replies: list[str]) -> None:
+    await cmd_help(a_message(), ProviderRegistry.enabled(["tiktok"]))
+    assert "TikTok" in replies[0]
+    assert "YouTube" not in replies[0]
+
+
 async def test_status_reports_the_queue_and_cache(
-    repo: Repository, cache: CacheStore, replies: list[str]
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    populate_cache_dir(cache.path_for(VIDEO_ID), make_manifest(VIDEO_ID))
-    request = await repo.create_request(USER, CHAT, "https://youtu.be/x", VIDEO_ID)
+    populate_cache_dir(cache.path_for(KEY), make_manifest(VIDEO_ID))
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     await repo.enqueue(request, ExtractType.AUDIO)
 
-    await cmd_status(a_message(), repo, FakeWorker(), cache, FakeYtdlp())  # pyright: ignore[reportArgumentType]
+    await cmd_status(a_message(), repo, FakeWorker(), cache, FakeYtdlp(), registry)  # pyright: ignore[reportArgumentType]
 
     text = replies[0]
     assert "Queue: 1 waiting" in text
     assert "Running: nothing" in text
     assert "Cache: 1 video(s)" in text
     assert "2026.08.19" in text
+    assert "Sites: YouTube, TikTok" in text
 
 
-async def test_status_names_the_running_job(
-    repo: Repository, cache: CacheStore, replies: list[str]
+async def test_status_names_the_running_job_with_its_provider(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    await cmd_status(a_message(), repo, FakeWorker(a_job()), cache, FakeYtdlp())  # pyright: ignore[reportArgumentType]
-    assert f"Running: {VIDEO_ID} (Splitting)" in replies[0]
+    await cmd_status(a_message(), repo, FakeWorker(a_job()), cache, FakeYtdlp(), registry)  # pyright: ignore[reportArgumentType]
+    assert f"Running: youtube:{VIDEO_ID} (Splitting)" in replies[0]
 
 
 async def test_cancel_with_nothing_queued(repo: Repository, replies: list[str]) -> None:
@@ -132,7 +163,7 @@ async def test_cancel_with_nothing_queued(repo: Repository, replies: list[str]) 
 
 async def test_cancel_drops_the_users_queued_jobs(repo: Repository, replies: list[str]) -> None:
     for video_id in ("aaaaaaaaaaa", "bbbbbbbbbbb"):
-        request = await repo.create_request(USER, CHAT, "https://youtu.be/x", video_id)
+        request = await repo.create_request(youtube_ref(video_id), user_id=USER, chat_id=CHAT)
         await repo.enqueue(request, ExtractType.AUDIO)
 
     await cmd_cancel(a_message(), repo, FakeWorker())  # pyright: ignore[reportArgumentType]
@@ -144,7 +175,7 @@ async def test_cancel_drops_the_users_queued_jobs(repo: Repository, replies: lis
 async def test_cancel_says_the_running_job_is_untouched(
     repo: Repository, replies: list[str]
 ) -> None:
-    request = await repo.create_request(USER, CHAT, "https://youtu.be/x", VIDEO_ID)
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     await repo.enqueue(request, ExtractType.AUDIO)
 
     await cmd_cancel(a_message(), repo, FakeWorker(a_job()))  # pyright: ignore[reportArgumentType]
@@ -155,7 +186,7 @@ async def test_cancel_says_the_running_job_is_untouched(
 async def test_cancel_does_not_mention_someone_elses_running_job(
     repo: Repository, replies: list[str]
 ) -> None:
-    request = await repo.create_request(USER, CHAT, "https://youtu.be/x", VIDEO_ID)
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     await repo.enqueue(request, ExtractType.AUDIO)
 
     await cmd_cancel(a_message(), repo, FakeWorker(a_job(user_id=OTHER)))  # pyright: ignore[reportArgumentType]
@@ -163,92 +194,177 @@ async def test_cancel_does_not_mention_someone_elses_running_job(
     assert "already running" not in replies[0]
 
 
-async def test_cookies_is_admin_only(settings: Settings, replies: list[str]) -> None:
-    await cmd_cookies(a_message(), settings, is_admin=False)
+# --- cookies -----------------------------------------------------------------
+
+
+async def test_cookies_is_admin_only(
+    settings: Any, replies: list[str], registry: ProviderRegistry
+) -> None:
+    await cmd_cookies(a_message(), settings, FakeYtdlp(), registry, is_admin=False)  # pyright: ignore[reportArgumentType]
     assert replies == ["That command is for admins."]
 
 
-async def test_cookies_reports_absence(settings: Settings, replies: list[str]) -> None:
-    await cmd_cookies(a_message(), settings, is_admin=True)
-    assert "No cookie file" in replies[0]
-
-
-async def test_cookies_reports_size_and_age_only(
-    settings: Settings, replies: list[str], tmp_path: Path
+async def test_cookies_reports_one_line_per_site(
+    settings: Any, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    path = tmp_path / "cookies.txt"
+    await cmd_cookies(a_message(), settings, FakeYtdlp(), registry, is_admin=True)  # pyright: ignore[reportArgumentType]
+    assert replies[0] == "YouTube: none\nTikTok: none"
+
+
+async def test_cookies_reports_size_and_age_but_never_contents(
+    settings: Any, replies: list[str], registry: ProviderRegistry, tmp_path: Path
+) -> None:
+    path = tmp_path / "cookies-youtube.txt"
     secret = "# Netscape HTTP Cookie File\n.google.com\tTRUE\t/\tTRUE\t0\tSID\tSUPERSECRETVALUE\n"
     path.write_text(secret, encoding="utf-8")
-    settings.cookies_file = path
 
-    await cmd_cookies(a_message(), settings, is_admin=True)
+    await cmd_cookies(
+        a_message(),
+        settings,
+        FakeYtdlp(cookies={"youtube": path}),  # pyright: ignore[reportArgumentType]
+        registry,
+        is_admin=True,
+    )
 
-    assert "Cookie file:" in replies[0]
+    assert "YouTube:" in replies[0]
+    assert "TikTok: none" in replies[0]
     assert "SUPERSECRET" not in replies[0]
     assert "SID" not in replies[0]
 
 
-async def test_cache_is_admin_only(repo: Repository, cache: CacheStore, replies: list[str]) -> None:
-    await cmd_cache(a_message(), command(None), repo, cache, is_admin=False)
+# --- cache -------------------------------------------------------------------
+
+
+async def test_cache_is_admin_only(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    await cmd_cache(a_message(), command(None), repo, cache, registry, is_admin=False)
     assert replies == ["That command is for admins."]
 
 
 async def test_cache_with_no_arguments_shows_usage(
-    repo: Repository, cache: CacheStore, replies: list[str]
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    await cmd_cache(a_message(), command(None), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command(None), repo, cache, registry, is_admin=True)
     assert "Cache: 0 video(s)" in replies[0]
     assert "/cache purge" in replies[0]
 
 
 async def test_cache_lookup_of_a_missing_video(
-    repo: Repository, cache: CacheStore, replies: list[str]
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    await cmd_cache(a_message(), command(VIDEO_ID), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command(VIDEO_ID), repo, cache, registry, is_admin=True)
     assert replies[0] == f"Not cached: {VIDEO_ID}"
 
 
-async def test_cache_lookup_accepts_a_url(
-    repo: Repository, cache: CacheStore, replies: list[str]
+async def test_cache_lookup_accepts_a_youtube_url(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    populate_cache_dir(cache.path_for(VIDEO_ID), make_manifest(VIDEO_ID))
+    populate_cache_dir(cache.path_for(KEY), make_manifest(VIDEO_ID))
     await cmd_cache(
         a_message(),
         command(f"https://www.youtube.com/watch?v={VIDEO_ID}"),
         repo,
         cache,
+        registry,
         is_admin=True,
     )
     assert "Test Album" in replies[0]
     assert "2 track(s)" in replies[0]
+    assert f"youtube:{VIDEO_ID}" in replies[0]
 
 
-async def test_cache_purge_one(repo: Repository, cache: CacheStore, replies: list[str]) -> None:
+async def test_cache_lookup_accepts_a_tiktok_url(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    populate_cache_dir(
+        cache.path_for(TIKTOK_KEY), make_manifest(TIKTOK_ID, tracks=1, provider="tiktok")
+    )
+    await cmd_cache(
+        a_message(),
+        command(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"),
+        repo,
+        cache,
+        registry,
+        is_admin=True,
+    )
+    assert f"tiktok:{TIKTOK_ID}" in replies[0]
+
+
+async def test_cache_lookup_accepts_a_provider_qualified_id(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    populate_cache_dir(
+        cache.path_for(TIKTOK_KEY), make_manifest(TIKTOK_ID, tracks=1, provider="tiktok")
+    )
+    await cmd_cache(
+        a_message(), command(f"tiktok:{TIKTOK_ID}"), repo, cache, registry, is_admin=True
+    )
+    assert f"tiktok:{TIKTOK_ID}" in replies[0]
+
+
+async def test_a_bare_id_cached_on_two_sites_asks_which(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    shared = "abc123"
+    populate_cache_dir(cache.path_for(CacheKey("youtube", shared)), make_manifest(shared))
+    populate_cache_dir(
+        cache.path_for(CacheKey("tiktok", shared)), make_manifest(shared, provider="tiktok")
+    )
+
+    await cmd_cache(a_message(), command(shared), repo, cache, registry, is_admin=True)
+
+    assert "several sites" in replies[0]
+    assert "youtube:abc123" in replies[0]
+    assert "tiktok:abc123" in replies[0]
+
+
+async def test_cache_purge_one(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
     manifest = make_manifest(VIDEO_ID)
-    populate_cache_dir(cache.path_for(VIDEO_ID), manifest)
+    populate_cache_dir(cache.path_for(KEY), manifest)
     await repo.record_cache_entry(manifest, 1000)
 
-    await cmd_cache(a_message(), command(f"purge {VIDEO_ID}"), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command(f"purge {VIDEO_ID}"), repo, cache, registry, is_admin=True)
 
-    assert replies[0] == f"Purged {VIDEO_ID}."
-    assert cache.get(VIDEO_ID) is None
-    assert await repo.cache_entry(VIDEO_ID) is None
+    assert "Purged" in replies[0]
+    assert cache.get(KEY) is None
+    assert await repo.cache_entry(KEY) is None
+
+
+async def test_purging_one_site_leaves_the_other(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    shared = "abc123"
+    youtube, tiktok = CacheKey("youtube", shared), CacheKey("tiktok", shared)
+    populate_cache_dir(cache.path_for(youtube), make_manifest(shared))
+    populate_cache_dir(cache.path_for(tiktok), make_manifest(shared, provider="tiktok"))
+
+    await cmd_cache(
+        a_message(), command(f"purge youtube:{shared}"), repo, cache, registry, is_admin=True
+    )
+
+    assert cache.get(youtube) is None
+    assert cache.get(tiktok) is not None
 
 
 async def test_cache_purge_a_missing_video(
-    repo: Repository, cache: CacheStore, replies: list[str]
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    await cmd_cache(a_message(), command(f"purge {VIDEO_ID}"), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command(f"purge {VIDEO_ID}"), repo, cache, registry, is_admin=True)
     assert replies[0] == f"Not cached: {VIDEO_ID}"
 
 
-async def test_cache_purge_all(repo: Repository, cache: CacheStore, replies: list[str]) -> None:
-    for video_id in ("aaaaaaaaaaa", "bbbbbbbbbbb"):
-        manifest = make_manifest(video_id)
-        populate_cache_dir(cache.path_for(video_id), manifest)
+async def test_cache_purge_all(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    for provider, video_id in (("youtube", "aaaaaaaaaaa"), ("tiktok", TIKTOK_ID)):
+        manifest = make_manifest(video_id, provider=provider)
+        populate_cache_dir(cache.path_for(CacheKey(provider, video_id)), manifest)
         await repo.record_cache_entry(manifest, 1000)
 
-    await cmd_cache(a_message(), command("purge all"), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command("purge all"), repo, cache, registry, is_admin=True)
 
     assert replies[0] == "Purged 2 cache entries."
     assert cache.entries() == []
@@ -256,7 +372,7 @@ async def test_cache_purge_all(repo: Repository, cache: CacheStore, replies: lis
 
 
 async def test_cache_purge_without_a_target_shows_usage(
-    repo: Repository, cache: CacheStore, replies: list[str]
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
 ) -> None:
-    await cmd_cache(a_message(), command("purge"), repo, cache, is_admin=True)
+    await cmd_cache(a_message(), command("purge"), repo, cache, registry, is_admin=True)
     assert "/cache purge" in replies[0]

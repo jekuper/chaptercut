@@ -11,9 +11,12 @@ from chaptercut.pipeline.ytdlp import (
     VideoInfo,
     Ytdlp,
     YtdlpError,
+    YtdlpFactory,
     looks_like_bot_check,
     parse_progress_line,
 )
+from chaptercut.providers.tiktok import TikTokProvider
+from chaptercut.providers.youtube import YouTubeProvider
 from tests.conftest import ytdlp_info
 
 
@@ -147,3 +150,54 @@ async def test_the_written_extension_is_discovered(tmp_path: Path) -> None:
 
 async def test_version_of_a_missing_binary_is_unknown() -> None:
     assert await Ytdlp(binary="definitely-not-installed-xyz").version() == "unknown"
+
+
+# --- per-provider configuration ----------------------------------------------
+
+
+def test_the_factory_uses_a_provider_specific_cookie_jar(tmp_path: Path) -> None:
+    shared = tmp_path / "cookies.txt"
+    shared.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    tiktok_jar = tmp_path / "cookies-tiktok.txt"
+    tiktok_jar.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+    factory = YtdlpFactory(data_dir=tmp_path, default_cookies=shared)
+
+    assert factory.cookies_for("tiktok") == tiktok_jar
+    assert factory.cookies_for("youtube") == shared
+
+
+def test_the_factory_falls_back_to_the_shared_jar(tmp_path: Path) -> None:
+    shared = tmp_path / "cookies.txt"
+    shared.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    factory = YtdlpFactory(data_dir=tmp_path, default_cookies=shared)
+    assert factory.cookies_for("tiktok") == shared
+
+
+def test_no_jar_anywhere_means_no_cookies(tmp_path: Path) -> None:
+    factory = YtdlpFactory(data_dir=tmp_path, default_cookies=tmp_path / "missing.txt")
+    assert factory.cookies_for("youtube") is None
+    assert "--cookies" not in factory.for_provider(YouTubeProvider())._base_argv()
+
+
+def test_provider_args_are_appended_after_the_operator_args(tmp_path: Path) -> None:
+    class Fussy(YouTubeProvider):
+        name = "fussy"
+        ytdlp_args = ("--extractor-args", "site:mode=x")
+
+    factory = YtdlpFactory(data_dir=tmp_path, extra_args=["--geo-bypass"])
+    argv = factory.for_provider(Fussy())._base_argv()
+
+    assert argv[-3:] == ["--geo-bypass", "--extractor-args", "site:mode=x"]
+
+
+def test_each_provider_gets_its_own_client(tmp_path: Path) -> None:
+    jar = tmp_path / "cookies-tiktok.txt"
+    jar.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    factory = YtdlpFactory(data_dir=tmp_path)
+
+    youtube = factory.for_provider(YouTubeProvider())
+    tiktok = factory.for_provider(TikTokProvider())
+
+    assert youtube.cookies_file is None
+    assert tiktok.cookies_file == jar

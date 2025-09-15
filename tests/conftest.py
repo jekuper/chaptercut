@@ -9,8 +9,11 @@ from typing import Any
 
 import pytest
 
-from chaptercut.cache.manifest import Manifest, ManifestTrack
-from chaptercut.cache.store import CacheStore
+from chaptercut.cache.manifest import SCHEMA_VERSION, Manifest, ManifestTrack
+from chaptercut.cache.store import CacheKey, CacheStore
+from chaptercut.pipeline.ytdlp import YtdlpFactory
+from chaptercut.providers.base import MediaRef
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.repository import Repository
 from chaptercut.settings import Settings
 
@@ -43,6 +46,37 @@ def cache(data_dir: Path) -> CacheStore:
 
 
 @pytest.fixture
+def registry() -> ProviderRegistry:
+    return ProviderRegistry()
+
+
+@pytest.fixture
+def ytdlp_factory(data_dir: Path) -> YtdlpFactory:
+    return YtdlpFactory(data_dir=data_dir)
+
+
+def youtube_ref(video_id: str = "dQw4w9WgXcQ") -> MediaRef:
+    return MediaRef(
+        provider="youtube",
+        media_id=video_id,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+    )
+
+
+def tiktok_ref(media_id: str = "7123456789012345678", resolved: bool = True) -> MediaRef:
+    url = (
+        f"https://www.tiktok.com/@u/video/{media_id}"
+        if resolved
+        else f"https://vm.tiktok.com/{media_id}"
+    )
+    return MediaRef(provider="tiktok", media_id=media_id, url=url, resolved=resolved)
+
+
+def key_for(video_id: str = "dQw4w9WgXcQ", provider: str = "youtube") -> CacheKey:
+    return CacheKey(provider=provider, media_id=video_id)
+
+
+@pytest.fixture
 async def repo(data_dir: Path) -> AsyncIterator[Repository]:
     repository = await Repository.open(data_dir / "test.db")
     yield repository
@@ -61,9 +95,12 @@ def requires_ffmpeg(ffmpeg_available: bool) -> Iterator[None]:
     yield
 
 
-def make_manifest(video_id: str = "dQw4w9WgXcQ", tracks: int = 2) -> Manifest:
+def make_manifest(
+    video_id: str = "dQw4w9WgXcQ", tracks: int = 2, provider: str = "youtube"
+) -> Manifest:
     return Manifest(
-        schema=1,
+        schema=SCHEMA_VERSION,
+        provider=provider,
         video_id=video_id,
         url=f"https://www.youtube.com/watch?v={video_id}",
         title="Test Album",

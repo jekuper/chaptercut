@@ -15,17 +15,19 @@ def esc(value: str) -> str:
 PRIVATE = "This bot is private."
 
 START = (
-    "Send me a YouTube link.\n\n"
+    "Send me a link.\n\n"
     "I can give you back the audio, split into one tagged MP3 per chapter, "
     "or the video at a quality you pick."
 )
 
 HELP = (
     "<b>chaptercut</b>\n\n"
-    "Send a YouTube link and choose:\n"
+    "Send a link and choose:\n"
     "- <b>Audio</b>: one MP3 per chapter, fully tagged with cover art. "
     "A video without chapters comes back as a single track.\n"
     "- <b>Video</b>: pick from the qualities that are actually available.\n\n"
+    "<b>Sites</b>\n"
+    "{sites}\n\n"
     "<b>Commands</b>\n"
     "/status - queue, current job, cache size, uptime\n"
     "/cancel - drop your queued jobs\n"
@@ -35,8 +37,9 @@ HELP = (
 HELP_ADMIN = "\n/cache - inspect or purge the cache\n/cookies - cookie file status"
 
 NOT_A_LINK = (
-    "That is not a YouTube link I recognise.\n"
-    "Send a youtube.com or youtu.be URL, or /help for what I can do."
+    "That is not a link I recognise.\n"
+    "I can take links from: {sites}.\n"
+    "Send /help for what I can do."
 )
 
 MULTIPLE_LINKS = "Found several links. Processing the first one; send the others separately."
@@ -79,12 +82,13 @@ COOKIES_STATUS = "Cookie file: {size}, last modified {age} ago."
 
 CACHE_USAGE_LINE = "Cache: {count} video(s), {size}"
 CACHE_NOT_CACHED = "Not cached: {video_id}"
-CACHE_ENTRY = "<b>{title}</b>\n{video_id} - {tracks} track(s), {size}\nDownloaded {date}"
+CACHE_ENTRY = "<b>{title}</b>\n{provider}:{video_id} - {tracks} track(s), {size}\nDownloaded {date}"
 CACHE_PURGED = "Purged {video_id}."
 CACHE_PURGED_ALL = "Purged {count} cache entries."
 CACHE_USAGE_HELP = (
-    "Usage: /cache &lt;video id or url&gt; | /cache purge &lt;id&gt; | /cache purge all"
+    "Usage: /cache &lt;url, id, or provider:id&gt; | /cache purge &lt;id&gt; | /cache purge all"
 )
+CACHE_AMBIGUOUS = "That id is cached for several sites. Use one of: {keys}"
 
 PHASE_LABELS = {
     "queued": "Queued",
@@ -109,6 +113,15 @@ RESULT_AUDIO_MULTI = "<b>{title}</b>\n{uploader} - {tracks} tracks, {size}"
 RESULT_VIDEO = "<b>{title}</b>\n{uploader} - {size}"
 
 
+def not_a_link(labels: list[str]) -> str:
+    return NOT_A_LINK.format(sites=", ".join(labels) or "nothing right now")
+
+
+def help_text(labels: list[str], is_admin: bool = False) -> str:
+    body = HELP.format(sites=", ".join(labels) or "none configured")
+    return body + (HELP_ADMIN if is_admin else "")
+
+
 def status_text(
     *,
     queue_length: int,
@@ -118,6 +131,7 @@ def status_text(
     uptime_seconds: float,
     ytdlp_version: str,
     ffmpeg_ok: bool,
+    providers: list[str],
 ) -> str:
     lines = [
         f"Queue: {queue_length} waiting",
@@ -126,6 +140,7 @@ def status_text(
         f"Uptime: {format_uptime(uptime_seconds)}",
         f"yt-dlp: {ytdlp_version}",
         f"ffmpeg: {'ok' if ffmpeg_ok else 'MISSING'}",
+        f"Sites: {', '.join(providers)}",
     ]
     return "\n".join(lines)
 
@@ -180,10 +195,16 @@ def video_caption(title: str, uploader: str, size_bytes: int) -> str:
 
 
 def cache_entry_text(
-    title: str, video_id: str, tracks: int, size_bytes: int, downloaded_at: str
+    title: str,
+    provider: str,
+    video_id: str,
+    tracks: int,
+    size_bytes: int,
+    downloaded_at: str,
 ) -> str:
     return CACHE_ENTRY.format(
         title=esc(title),
+        provider=provider,
         video_id=video_id,
         tracks=tracks,
         size=format_bytes(size_bytes),

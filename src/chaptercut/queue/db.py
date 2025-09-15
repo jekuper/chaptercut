@@ -11,7 +11,7 @@ from chaptercut.logging import get_logger
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: list[str] = [
     # v1: requests, jobs, cache_entries
@@ -56,6 +56,33 @@ MIGRATIONS: list[str] = [
       downloaded_at   TEXT,
       last_served_at  TEXT
     );
+    CREATE INDEX IF NOT EXISTS cache_served_idx ON cache_entries(last_served_at);
+    """,
+    # v2: multi-provider support. Existing rows are YouTube by definition,
+    # since that was the only source before this migration. cache_entries is
+    # rebuilt rather than altered, because its key becomes (provider, id): a
+    # media id is only unique within one site.
+    """
+    ALTER TABLE requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'youtube';
+    ALTER TABLE jobs     ADD COLUMN provider TEXT NOT NULL DEFAULT 'youtube';
+    CREATE INDEX IF NOT EXISTS jobs_provider_idx ON jobs(provider);
+
+    CREATE TABLE cache_entries_v2 (
+      provider        TEXT NOT NULL,
+      video_id        TEXT NOT NULL,
+      title           TEXT,
+      bytes           INTEGER,
+      tracks          INTEGER,
+      downloaded_at   TEXT,
+      last_served_at  TEXT,
+      PRIMARY KEY (provider, video_id)
+    );
+    INSERT INTO cache_entries_v2
+      (provider, video_id, title, bytes, tracks, downloaded_at, last_served_at)
+      SELECT 'youtube', video_id, title, bytes, tracks, downloaded_at, last_served_at
+      FROM cache_entries;
+    DROP TABLE cache_entries;
+    ALTER TABLE cache_entries_v2 RENAME TO cache_entries;
     CREATE INDEX IF NOT EXISTS cache_served_idx ON cache_entries(last_served_at);
     """,
 ]

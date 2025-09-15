@@ -14,7 +14,9 @@ from typing import Any
 import aiosqlite
 
 from chaptercut.cache.manifest import Manifest
+from chaptercut.cache.store import CacheKey
 from chaptercut.logging import get_logger
+from chaptercut.providers.base import MediaRef
 from chaptercut.queue.db import connect
 from chaptercut.queue.models import ExtractType, Job, JobState, Phase, Request
 from chaptercut.util.timefmt import iso, utcnow
@@ -54,28 +56,30 @@ class Repository:
 
     # --- requests ---------------------------------------------------------
 
-    async def create_request(self, user_id: int, chat_id: int, url: str, video_id: str) -> Request:
+    async def create_request(self, ref: MediaRef, user_id: int, chat_id: int) -> Request:
         now = utcnow()
         request = Request(
             req_id=new_id(),
             user_id=user_id,
             chat_id=chat_id,
-            url=url,
-            video_id=video_id,
+            url=ref.url,
+            provider=ref.provider,
+            video_id=ref.media_id,
             created_at=now,
             expires_at=now + REQUEST_TTL,
         )
         await self.conn.execute(
             """INSERT INTO requests
-               (req_id, user_id, chat_id, url, video_id, extract_type, formats_json,
-                created_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)""",
+               (req_id, user_id, chat_id, url, provider, video_id, extract_type,
+                formats_json, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)""",
             (
                 request.req_id,
                 user_id,
                 chat_id,
-                url,
-                video_id,
+                request.url,
+                request.provider,
+                request.video_id,
                 iso(request.created_at),
                 iso(request.expires_at),
             ),
@@ -123,6 +127,7 @@ class Repository:
             chat_id=request.chat_id,
             status_msg_id=status_msg_id,
             kind=kind,
+            provider=request.provider,
             video_id=request.video_id,
             url=request.url,
             format_id=format_id,
@@ -132,9 +137,10 @@ class Repository:
         )
         await self.conn.execute(
             """INSERT INTO jobs
-               (job_id, req_id, user_id, chat_id, status_msg_id, kind, video_id, url,
-                format_id, state, phase, error, created_at, started_at, finished_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)""",
+               (job_id, req_id, user_id, chat_id, status_msg_id, kind, provider,
+                video_id, url, format_id, state, phase, error, created_at,
+                started_at, finished_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)""",
             (
                 job.job_id,
                 job.req_id,
@@ -142,6 +148,7 @@ class Repository:
                 job.chat_id,
                 job.status_msg_id,
                 job.kind.value,
+                job.provider,
                 job.video_id,
                 job.url,
                 job.format_id,
@@ -150,7 +157,13 @@ class Repository:
                 iso(job.created_at),
             ),
         )
-        log.info("job.enqueued", job_id=job.job_id, video_id=job.video_id, kind=job.kind.value)
+        log.info(
+            "job.enqueued",
+            job_id=job.job_id,
+            provider=job.provider,
+            video_id=job.video_id,
+            kind=job.kind.value,
+        )
         return job
 
     async def get_job(self, job_id: str) -> Job | None:
@@ -269,15 +282,16 @@ class Repository:
         now = iso(utcnow())
         await self.conn.execute(
             """INSERT INTO cache_entries
-                 (video_id, title, bytes, tracks, downloaded_at, last_served_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(video_id) DO UPDATE SET
+                 (provider, video_id, title, bytes, tracks, downloaded_at, last_served_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(provider, video_id) DO UPDATE SET
                  title = excluded.title,
                  bytes = excluded.bytes,
                  tracks = excluded.tracks,
                  downloaded_at = excluded.downloaded_at,
                  last_served_at = excluded.last_served_at""",
             (
+                manifest.provider,
                 manifest.video_id,
                 manifest.title,
                 size_bytes,
@@ -287,23 +301,31 @@ class Repository:
             ),
         )
 
-    async def touch_cache_entry(self, video_id: str) -> None:
+    async def touch_cache_entry(self, key: CacheKey) -> None:
         await self.conn.execute(
-            "UPDATE cache_entries SET last_served_at = ? WHERE video_id = ?",
-            (iso(utcnow()), video_id),
+            "UPDATE cache_entries SET last_served_at = ? WHERE provider = ? AND video_id = ?",
+            (iso(utcnow()), key.provider, key.media_id),
         )
 
-    async def forget_cache_entry(self, video_id: str) -> None:
-        await self.conn.execute("DELETE FROM cache_entries WHERE video_id = ?", (video_id,))
+    async def forget_cache_entry(self, key: CacheKey) -> None:
+        await self.conn.execute(
+            "DELETE FROM cache_entries WHERE provider = ? AND video_id = ?",
+            (key.provider, key.media_id),
+        )
 
-    async def cache_entry(self, video_id: str) -> dict[str, Any] | None:
-        return await self._fetchone("SELECT * FROM cache_entries WHERE video_id = ?", (video_id,))
+    async def cache_entry(self, key: CacheKey) -> dict[str, Any] | None:
+        return await self._fetchone(
+            "SELECT * FROM cache_entries WHERE provider = ? AND video_id = ?",
+            (key.provider, key.media_id),
+        )
 
-    async def cache_entries_by_age(self) -> list[dict[str, Any]]:
+    async def cache_keys_by_age(self) -> list[CacheKey]:
         """Least recently served first: the eviction order."""
-        return await self._fetchall(
-            "SELECT * FROM cache_entries ORDER BY COALESCE(last_served_at, downloaded_at, '')"
+        rows = await self._fetchall(
+            "SELECT provider, video_id FROM cache_entries "
+            "ORDER BY COALESCE(last_served_at, downloaded_at, '')"
         )
+        return [CacheKey(provider=str(r["provider"]), media_id=str(r["video_id"])) for r in rows]
 
     async def cache_total_bytes(self) -> int:
         row = await self._fetchone("SELECT COALESCE(SUM(bytes), 0) AS total FROM cache_entries")

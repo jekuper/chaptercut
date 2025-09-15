@@ -14,12 +14,13 @@ import pytest
 from mutagen.id3 import ID3
 
 from chaptercut.cache.manifest import read_manifest
-from chaptercut.cache.store import CacheStore
+from chaptercut.cache.store import CacheKey, CacheStore
 from chaptercut.pipeline import cover as cover_art
 from chaptercut.pipeline.process import run_checked
 from chaptercut.pipeline.runner import AudioResult, Pipeline, VideoResult
 from chaptercut.pipeline.sink import RecordingSink
 from chaptercut.pipeline.ytdlp import VideoInfo
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.models import ExtractType, Job, JobState, Phase
 from chaptercut.settings import Settings
 from chaptercut.util.timefmt import utcnow
@@ -38,7 +39,10 @@ CHAPTERS = [
 
 
 class FakeYtdlp:
-    """Returns canned metadata and copies a prepared file instead of downloading."""
+    """Returns canned metadata and copies a prepared file instead of downloading.
+
+    Doubles as the factory, so the pipeline's per-provider lookup is exercised.
+    """
 
     def __init__(self, source: Path, info: dict[str, Any]) -> None:
         self.source = source
@@ -46,8 +50,15 @@ class FakeYtdlp:
         self.audio_calls = 0
         self.video_calls = 0
         self.last_format_id: str | None = None
+        self.last_url: str | None = None
+        self.providers_seen: list[str] = []
+
+    def for_provider(self, provider: Any) -> FakeYtdlp:
+        self.providers_seen.append(provider.name)
+        return self
 
     async def info(self, url: str, timeout: float = 120.0) -> VideoInfo:
+        self.last_url = url
         return VideoInfo(self.info_dict)
 
     async def download_audio(
@@ -122,15 +133,22 @@ async def tone_mp3(tmp_path: Path, requires_ffmpeg: None) -> Path:
     return path
 
 
-def a_job(kind: ExtractType = ExtractType.AUDIO, format_id: str | None = None) -> Job:
+def a_job(
+    kind: ExtractType = ExtractType.AUDIO,
+    format_id: str | None = None,
+    provider: str = "youtube",
+    video_id: str = VIDEO_ID,
+    url: str | None = None,
+) -> Job:
     return Job(
         job_id="job1234",
         req_id="req12345",
         user_id=111,
         chat_id=999,
         kind=kind,
-        video_id=VIDEO_ID,
-        url=f"https://www.youtube.com/watch?v={VIDEO_ID}",
+        provider=provider,
+        video_id=video_id,
+        url=url or f"https://www.youtube.com/watch?v={video_id}",
         state=JobState.RUNNING,
         created_at=utcnow(),
         format_id=format_id,
@@ -138,10 +156,15 @@ def a_job(kind: ExtractType = ExtractType.AUDIO, format_id: str | None = None) -
 
 
 def build(
-    settings: Settings, cache: CacheStore, tone: Path, **info_kwargs: Any
+    settings: Settings,
+    cache: CacheStore,
+    tone: Path,
+    video_id: str = VIDEO_ID,
+    **info_kwargs: Any,
 ) -> tuple[Pipeline, FakeYtdlp]:
-    ytdlp = FakeYtdlp(tone, ytdlp_info(VIDEO_ID, **info_kwargs))
-    return Pipeline(settings, ytdlp, cache), ytdlp  # pyright: ignore[reportArgumentType]
+    ytdlp = FakeYtdlp(tone, ytdlp_info(video_id, **info_kwargs))
+    pipeline = Pipeline(settings, ytdlp, cache, ProviderRegistry())  # pyright: ignore[reportArgumentType]
+    return pipeline, ytdlp
 
 
 async def test_audio_job_produces_tagged_tracks_a_cover_and_a_zip(
@@ -184,11 +207,11 @@ async def test_the_result_is_committed_to_the_cache_atomically(
     pipeline, _ytdlp = build(settings, cache, tone_mp3, chapters=CHAPTERS)
     await pipeline.run(a_job(), data_dir / "work" / "job1234", RecordingSink())
 
-    entry = cache.get(VIDEO_ID)
+    entry = cache.get(CacheKey("youtube", VIDEO_ID))
     assert entry is not None
     assert len(entry.manifest.tracks) == 3
-    assert read_manifest(cache.path_for(VIDEO_ID)) is not None
-    assert not cache.tmp_path_for(VIDEO_ID).exists()
+    assert read_manifest(cache.path_for(CacheKey("youtube", VIDEO_ID))) is not None
+    assert not cache.tmp_path_for(CacheKey("youtube", VIDEO_ID)).exists()
 
 
 async def test_a_second_run_is_served_from_the_cache_without_downloading(
@@ -248,7 +271,7 @@ async def test_track_mtimes_are_staggered_after_a_cache_hit(
     await pipeline.run(a_job(), data_dir / "work" / "job1", RecordingSink())
 
     # Flatten the mtimes the way a copy would, then serve from cache.
-    for path in cache.path_for(VIDEO_ID).glob("*.mp3"):
+    for path in cache.path_for(CacheKey("youtube", VIDEO_ID)).glob("*.mp3"):
         path.touch()
     result = await pipeline.run(a_job(), data_dir / "work" / "job2", RecordingSink())
 
@@ -280,7 +303,7 @@ async def test_a_video_job_does_not_populate_the_audio_cache(
     await pipeline.run(
         a_job(ExtractType.VIDEO, format_id="137"), data_dir / "work" / "job1234", RecordingSink()
     )
-    assert cache.get(VIDEO_ID) is None
+    assert cache.get(CacheKey("youtube", VIDEO_ID)) is None
 
 
 async def test_eviction_removes_the_least_recently_served_first(
@@ -290,10 +313,11 @@ async def test_eviction_removes_the_least_recently_served_first(
     await pipeline.run(a_job(), data_dir / "work" / "job1", RecordingSink())
 
     settings.cache_max_bytes = 1
-    removed = pipeline.evict_to_fit([VIDEO_ID])
+    key = CacheKey("youtube", VIDEO_ID)
+    removed = pipeline.evict_to_fit([key])
 
-    assert removed == [VIDEO_ID]
-    assert cache.get(VIDEO_ID) is None
+    assert removed == [key]
+    assert cache.get(CacheKey("youtube", VIDEO_ID)) is None
 
 
 async def test_nothing_is_evicted_while_under_budget(
@@ -301,5 +325,163 @@ async def test_nothing_is_evicted_while_under_budget(
 ) -> None:
     pipeline, _ytdlp = build(settings, cache, tone_mp3, chapters=CHAPTERS)
     await pipeline.run(a_job(), data_dir / "work" / "job1", RecordingSink())
-    assert pipeline.evict_to_fit([VIDEO_ID]) == []
-    assert cache.get(VIDEO_ID) is not None
+    assert pipeline.evict_to_fit([CacheKey("youtube", VIDEO_ID)]) == []
+    assert cache.get(CacheKey("youtube", VIDEO_ID)) is not None
+
+
+# --- TikTok ------------------------------------------------------------------
+
+TIKTOK_ID = "7123456789012345678"
+
+
+def tiktok_job(video_id: str = TIKTOK_ID, url: str | None = None) -> Job:
+    return a_job(
+        provider="tiktok",
+        video_id=video_id,
+        url=url or f"https://www.tiktok.com/@u/video/{video_id}",
+    )
+
+
+async def test_a_tiktok_audio_job_is_one_track_even_with_chapters(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    # TikTok never has chapters. If yt-dlp ever reports some, the provider
+    # says the site has no such concept and the whole clip stays one track.
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID, chapters=CHAPTERS)
+
+    result = await pipeline.run(tiktok_job(), data_dir / "work" / "job1", RecordingSink())
+
+    assert isinstance(result, AudioResult)
+    assert result.track_count == 1
+    assert result.zip_path is None
+    assert ytdlp.providers_seen == ["tiktok", "tiktok"]
+
+
+async def test_a_tiktok_caption_loses_its_hashtags_in_the_tags(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    pipeline, _ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+    pipeline.ytdlp.info_dict["title"] = "sunset timelapse #fyp #viral"  # pyright: ignore[reportAttributeAccessIssue]
+
+    result = await pipeline.run(tiktok_job(), data_dir / "work" / "job1", RecordingSink())
+
+    assert isinstance(result, AudioResult)
+    assert result.title == "sunset timelapse"
+    tags = ID3(result.tracks[0])
+    assert tags["TIT2"].text == ["sunset timelapse"]
+    assert tags["TALB"].text == ["sunset timelapse"]
+    assert result.tracks[0].name == "01 - sunset timelapse.mp3"
+
+
+async def test_a_tiktok_result_is_cached_under_its_own_namespace(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    pipeline, _ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+    await pipeline.run(tiktok_job(), data_dir / "work" / "job1", RecordingSink())
+
+    entry = cache.get(CacheKey("tiktok", TIKTOK_ID))
+    assert entry is not None
+    assert entry.manifest.provider == "tiktok"
+    assert cache.get(CacheKey("youtube", TIKTOK_ID)) is None
+
+
+async def test_a_short_link_resolves_its_id_from_the_metadata_fetch(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    # Intake only had the redirect code; the real id arrives with the metadata.
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+    job = tiktok_job(video_id="ZMhqAbCdE", url="https://vm.tiktok.com/ZMhqAbCdE")
+
+    result = await pipeline.run(job, data_dir / "work" / "job1", RecordingSink())
+
+    assert isinstance(result, AudioResult)
+    assert result.video_id == TIKTOK_ID
+    assert result.key == CacheKey("tiktok", TIKTOK_ID)
+    assert ytdlp.last_url == "https://vm.tiktok.com/ZMhqAbCdE"
+    # Cached under the real id, not the throwaway code.
+    assert cache.get(CacheKey("tiktok", TIKTOK_ID)) is not None
+    assert cache.get(CacheKey("tiktok", "ZMhqAbCdE")) is None
+
+
+async def test_a_second_short_link_to_the_same_video_hits_the_cache(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+    await pipeline.run(
+        tiktok_job(video_id="ZMhqAbCdE", url="https://vm.tiktok.com/ZMhqAbCdE"),
+        data_dir / "work" / "job1",
+        RecordingSink(),
+    )
+
+    # A different code for the same video: resolves to the same id, so the
+    # download is skipped even though the two links look nothing alike.
+    second = await pipeline.run(
+        tiktok_job(video_id="ZSxyzxyzx", url="https://vt.tiktok.com/ZSxyzxyzx"),
+        data_dir / "work" / "job2",
+        RecordingSink(),
+    )
+
+    assert isinstance(second, AudioResult)
+    assert second.from_cache is True
+    assert ytdlp.audio_calls == 1
+
+
+async def test_a_resolved_tiktok_link_skips_the_fetch_on_a_cache_hit(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+    await pipeline.run(tiktok_job(), data_dir / "work" / "job1", RecordingSink())
+    calls_after_first = len(ytdlp.providers_seen)
+
+    second = await pipeline.run(tiktok_job(), data_dir / "work" / "job2", RecordingSink())
+
+    assert isinstance(second, AudioResult)
+    assert second.from_cache is True
+    assert len(ytdlp.providers_seen) == calls_after_first
+
+
+async def test_a_tiktok_video_job_uses_the_tiktok_client(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=TIKTOK_ID)
+
+    result = await pipeline.run(
+        a_job(
+            ExtractType.VIDEO,
+            format_id="0",
+            provider="tiktok",
+            video_id=TIKTOK_ID,
+            url=f"https://www.tiktok.com/@u/video/{TIKTOK_ID}",
+        ),
+        data_dir / "work" / "job1",
+        RecordingSink(),
+    )
+
+    assert isinstance(result, VideoResult)
+    assert result.path.is_file()
+    assert result.video_id == TIKTOK_ID
+    assert ytdlp.video_calls == 1
+    assert set(ytdlp.providers_seen) == {"tiktok"}
+
+
+async def test_youtube_and_tiktok_with_the_same_id_do_not_share_a_cache_entry(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    shared = "1234567890a"
+    youtube_pipeline, _ = build(settings, cache, tone_mp3, video_id=shared, chapters=CHAPTERS)
+    await youtube_pipeline.run(a_job(video_id=shared), data_dir / "work" / "job1", RecordingSink())
+
+    tiktok_pipeline, tiktok_ytdlp = build(settings, cache, tone_mp3, video_id=shared)
+    result = await tiktok_pipeline.run(
+        tiktok_job(video_id=shared, url=f"https://www.tiktok.com/@u/video/{shared}"),
+        data_dir / "work" / "job2",
+        RecordingSink(),
+    )
+
+    assert isinstance(result, AudioResult)
+    assert result.from_cache is False
+    assert tiktok_ytdlp.audio_calls == 1
+    assert result.track_count == 1
+    youtube_entry = cache.get(CacheKey("youtube", shared))
+    assert youtube_entry is not None
+    assert len(youtube_entry.manifest.tracks) == 3

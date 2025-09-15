@@ -13,7 +13,8 @@ from chaptercut.bot import keyboards, texts
 from chaptercut.bot.callbacks import BackCb, QualityCb, TypeCb
 from chaptercut.logging import get_logger
 from chaptercut.pipeline.formats import find_option, select_video_formats
-from chaptercut.pipeline.ytdlp import Ytdlp, YtdlpError
+from chaptercut.pipeline.ytdlp import YtdlpError, YtdlpFactory
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.models import ExtractType, Request
 from chaptercut.queue.repository import Repository
 from chaptercut.queue.worker import Worker
@@ -44,7 +45,8 @@ async def on_type(
     callback_data: TypeCb,
     repo: Repository,
     worker: Worker,
-    ytdlp: Ytdlp,
+    ytdlp: YtdlpFactory,
+    registry: ProviderRegistry,
 ) -> None:
     request = await _resolve(callback, repo, callback_data.req_id)
     if request is None:
@@ -55,7 +57,7 @@ async def on_type(
     if callback_data.kind is ExtractType.AUDIO:
         await _enqueue(callback, repo, worker, request, ExtractType.AUDIO)
         return
-    await _show_qualities(callback, repo, ytdlp, request)
+    await _show_qualities(callback, repo, ytdlp, registry, request)
 
 
 @router.callback_query(BackCb.filter())
@@ -92,7 +94,11 @@ async def on_quality(
 
 
 async def _show_qualities(
-    callback: CallbackQuery, repo: Repository, ytdlp: Ytdlp, request: Request
+    callback: CallbackQuery,
+    repo: Repository,
+    ytdlp: YtdlpFactory,
+    registry: ProviderRegistry,
+    request: Request,
 ) -> None:
     message = callback.message
     if not isinstance(message, Message):
@@ -102,10 +108,14 @@ async def _show_qualities(
     options = request.formats
     if not options:
         try:
-            info = await ytdlp.info(request.url)
+            provider = registry.get(request.provider)
+            info = await ytdlp.for_provider(provider).info(request.url)
         except YtdlpError as exc:
             log.warning(
-                "choices.formats_failed", video_id=request.video_id, bot_check=exc.bot_check
+                "choices.formats_failed",
+                provider=request.provider,
+                video_id=request.video_id,
+                bot_check=exc.bot_check,
             )
             await message.edit_text(texts.FAILED_BOT_CHECK if exc.bot_check else texts.NO_FORMATS)
             return

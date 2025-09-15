@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from chaptercut.cache.manifest import Manifest, ManifestTrack
-from chaptercut.cache.store import CachedResult, CacheStore
+from chaptercut.cache.manifest import SCHEMA_VERSION, Manifest, ManifestTrack
+from chaptercut.cache.store import CachedResult, CacheKey, CacheStore
 from chaptercut.logging import get_logger
 from chaptercut.pipeline import cover as cover_art
 from chaptercut.pipeline import ffmpeg, package
@@ -20,11 +20,12 @@ from chaptercut.pipeline.chapters import Track, chapters_from_info
 from chaptercut.pipeline.sanitize import safe_filename, safe_title, track_filename
 from chaptercut.pipeline.sink import ProgressSink
 from chaptercut.pipeline.tagging import TrackMeta, apply_mtimes, write_tags
-from chaptercut.pipeline.ytdlp import DownloadProgress, VideoInfo, Ytdlp
+from chaptercut.pipeline.ytdlp import DownloadProgress, VideoInfo, YtdlpFactory
+from chaptercut.providers.base import Provider
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.models import ExtractType, Job, Phase
 from chaptercut.settings import Settings
 from chaptercut.util.timefmt import format_bytes, iso, parse_iso, utcnow
-from chaptercut.util.youtube import canonical_url
 
 log = get_logger(__name__)
 
@@ -53,6 +54,7 @@ class AudioResult:
     cover: Path | None
     zip_path: Path | None
     from_cache: bool
+    key: CacheKey
 
     @property
     def track_count(self) -> int:
@@ -94,36 +96,59 @@ class JobPaths:
 
 
 class Pipeline:
-    def __init__(self, settings: Settings, ytdlp: Ytdlp, cache: CacheStore) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        ytdlp: YtdlpFactory,
+        cache: CacheStore,
+        registry: ProviderRegistry,
+    ) -> None:
         self.settings = settings
         self.ytdlp = ytdlp
         self.cache = cache
+        self.registry = registry
 
     async def run(self, job: Job, work_root: Path, sink: ProgressSink) -> AudioResult | VideoResult:
         paths = JobPaths(work_root)
         paths.prepare()
+        provider = self.registry.get(job.provider)
         if job.kind is ExtractType.AUDIO:
-            return await self._run_audio(job, paths, sink)
-        return await self._run_video(job, paths, sink)
+            return await self._run_audio(job, provider, paths, sink)
+        return await self._run_video(job, provider, paths, sink)
 
     # --- audio ------------------------------------------------------------
 
-    async def _run_audio(self, job: Job, paths: JobPaths, sink: ProgressSink) -> AudioResult:
-        cached = self.cache.get(job.video_id)
-        if cached is not None:
-            log.info("pipeline.cache_hit", video_id=job.video_id)
-            return await self._from_cache(cached, paths, sink)
+    async def _run_audio(
+        self, job: Job, provider: Provider, paths: JobPaths, sink: ProgressSink
+    ) -> AudioResult:
+        key = CacheKey(provider=provider.name, media_id=job.video_id)
+
+        # A short link carries no id yet, so there is nothing to look up until
+        # the metadata fetch has told us what it points at.
+        if provider.cache_audio and provider.is_canonical_id(job.video_id):
+            cached = self.cache.get(key)
+            if cached is not None:
+                log.info("pipeline.cache_hit", key=str(key))
+                return await self._from_cache(cached, paths, sink)
 
         await sink.update(Phase.FETCH, detail="reading metadata", force=True)
-        info = await self._fetch_info(job)
+        info = await self._fetch_info(job, provider)
+
+        resolved = CacheKey(provider=provider.name, media_id=info.video_id or job.video_id)
+        if provider.cache_audio and resolved != key:
+            log.info("pipeline.resolved", was=str(key), now=str(resolved))
+            cached = self.cache.get(resolved)
+            if cached is not None:
+                log.info("pipeline.cache_hit", key=str(resolved))
+                return await self._from_cache(cached, paths, sink)
 
         downloaded_at = utcnow()
         await sink.update(Phase.DOWNLOAD, pct=0.0, force=True)
-        source = await self._download_audio(job, paths, sink)
+        source = await self._download_audio(job, provider, paths, sink)
 
         duration = await ffmpeg.probe_duration(source)
-        tracks = chapters_from_info(info.raw, duration=duration)
-        log.info("pipeline.tracks", video_id=job.video_id, count=len(tracks))
+        tracks = self._tracks_for(provider, info, duration)
+        log.info("pipeline.tracks", key=str(resolved), count=len(tracks))
 
         cover = await cover_art.fetch_and_normalize(
             info.thumbnail_url,
@@ -132,11 +157,13 @@ class Pipeline:
         )
 
         written = await self._cut_tracks(source, tracks, paths, sink)
-        await self._tag_tracks(written, tracks, info, downloaded_at, cover, sink)
+        await self._tag_tracks(written, tracks, info, provider, downloaded_at, cover, sink)
         apply_mtimes([path for _, path in written], downloaded_at)
 
-        manifest = _build_manifest(info, tracks, written, cover, downloaded_at, duration)
-        entry = self.cache.commit(job.video_id, paths.out, manifest)
+        manifest = _build_manifest(
+            info, provider, resolved, written, cover, downloaded_at, duration
+        )
+        entry = self.cache.commit(resolved, paths.out, manifest)
 
         # The out dir moved into the cache; work from the committed copy now.
         paths.out.mkdir(parents=True, exist_ok=True)
@@ -144,7 +171,7 @@ class Pipeline:
 
         zip_path = await self._package(entry, paths, sink)
         return AudioResult(
-            video_id=job.video_id,
+            video_id=resolved.media_id,
             title=manifest.title,
             uploader=manifest.uploader,
             duration=duration,
@@ -154,6 +181,7 @@ class Pipeline:
             cover=entry.cover_path,
             zip_path=zip_path,
             from_cache=False,
+            key=entry.key,
         )
 
     async def _from_cache(
@@ -174,6 +202,7 @@ class Pipeline:
             cover=cached.cover_path,
             zip_path=zip_path,
             from_cache=True,
+            key=cached.key,
         )
 
     async def _package(
@@ -207,21 +236,30 @@ class Pipeline:
             written.append((track, destination))
         return written
 
+    def _tracks_for(self, provider: Provider, info: VideoInfo, duration: float) -> list[Track]:
+        """Chapters, unless the site has no such concept."""
+        raw = dict(info.raw)
+        if not provider.supports_chapters:
+            raw["chapters"] = []
+        raw["title"] = provider.clean_title(info.title)
+        return chapters_from_info(raw, duration=duration)
+
     async def _tag_tracks(
         self,
         written: list[tuple[Track, Path]],
         tracks: list[Track],
         info: VideoInfo,
+        provider: Provider,
         downloaded_at: datetime,
         cover: Path | None,
         sink: ProgressSink,
     ) -> None:
         await sink.update(Phase.TAG, detail=f"{len(tracks)} tracks", force=True)
         meta = TrackMeta(
-            album=safe_title(info.title),
+            album=safe_title(provider.clean_title(info.title)),
             artist=safe_title(info.uploader),
             video_id=info.video_id,
-            url=info.webpage_url or canonical_url(info.video_id),
+            url=info.webpage_url or "",
             year=info.year,
             downloaded_at=downloaded_at,
             total_tracks=len(tracks),
@@ -230,11 +268,13 @@ class Pipeline:
             await sink.update(Phase.TAG, pct=index / len(written) * 100, detail=track.title)
             await write_tags(path, track, meta, cover)
 
-    async def _download_audio(self, job: Job, paths: JobPaths, sink: ProgressSink) -> Path:
+    async def _download_audio(
+        self, job: Job, provider: Provider, paths: JobPaths, sink: ProgressSink
+    ) -> Path:
         target = paths.root / SOURCE_STEM
         progress = _ProgressBridge(sink, Phase.DOWNLOAD)
-        return await self.ytdlp.download_audio(
-            canonical_url(job.video_id),
+        return await self.ytdlp.for_provider(provider).download_audio(
+            job.url,
             target,
             timeout=self.settings.download_timeout_seconds,
             bitrate=self.settings.audio_bitrate,
@@ -243,14 +283,16 @@ class Pipeline:
 
     # --- video ------------------------------------------------------------
 
-    async def _run_video(self, job: Job, paths: JobPaths, sink: ProgressSink) -> VideoResult:
+    async def _run_video(
+        self, job: Job, provider: Provider, paths: JobPaths, sink: ProgressSink
+    ) -> VideoResult:
         await sink.update(Phase.FETCH, detail="reading metadata", force=True)
-        info = await self._fetch_info(job)
+        info = await self._fetch_info(job, provider)
 
         await sink.update(Phase.DOWNLOAD, pct=0.0, force=True)
         progress = _ProgressBridge(sink, Phase.DOWNLOAD)
-        path = await self.ytdlp.download_video(
-            canonical_url(job.video_id),
+        path = await self.ytdlp.for_provider(provider).download_video(
+            job.url,
             paths.root / VIDEO_STEM,
             timeout=self.settings.download_timeout_seconds,
             format_id=job.format_id,
@@ -262,8 +304,8 @@ class Pipeline:
         )
         duration = info.duration or 0.0
         return VideoResult(
-            video_id=job.video_id,
-            title=safe_title(info.title),
+            video_id=info.video_id or job.video_id,
+            title=safe_title(provider.clean_title(info.title)),
             uploader=safe_title(info.uploader),
             duration=duration,
             path=path,
@@ -272,31 +314,31 @@ class Pipeline:
             thumbnail=thumbnail,
         )
 
-    async def _fetch_info(self, job: Job) -> VideoInfo:
-        info = await self.ytdlp.info(canonical_url(job.video_id))
+    async def _fetch_info(self, job: Job, provider: Provider) -> VideoInfo:
+        info = await self.ytdlp.for_provider(provider).info(job.url)
         if info.duration is None and not info.raw.get("chapters"):
-            log.warning("pipeline.no_duration", video_id=job.video_id)
+            log.warning("pipeline.no_duration", provider=provider.name, video_id=job.video_id)
         return info
 
     # --- cache maintenance ------------------------------------------------
 
-    def evict_to_fit(self, order: list[str]) -> list[str]:
+    def evict_to_fit(self, order: list[CacheKey]) -> list[CacheKey]:
         """Delete least-recently-served entries until the cache fits the budget.
 
-        `order` is the eviction order; returns the video ids actually removed.
+        `order` is the eviction order; returns the keys actually removed.
         """
         budget = self.settings.cache_max_bytes
         usage = self.cache.usage_bytes()
-        removed: list[str] = []
-        for video_id in order:
+        removed: list[CacheKey] = []
+        for key in order:
             if usage <= budget:
                 break
-            entry = self.cache.get(video_id)
+            entry = self.cache.get(key)
             size = entry.size_bytes if entry is not None else 0
-            if self.cache.delete(video_id):
+            if self.cache.delete(key):
                 usage -= size
-                removed.append(video_id)
-                log.info("cache.evicted", video_id=video_id, freed=format_bytes(size))
+                removed.append(key)
+                log.info("cache.evicted", key=str(key), freed=format_bytes(size))
         return removed
 
 
@@ -325,17 +367,19 @@ class _ProgressBridge:
 
 def _build_manifest(
     info: VideoInfo,
-    tracks: list[Track],
+    provider: Provider,
+    key: CacheKey,
     written: list[tuple[Track, Path]],
     cover: Path | None,
     downloaded_at: datetime,
     duration: float,
 ) -> Manifest:
     return Manifest(
-        schema=1,
-        video_id=info.video_id,
-        url=info.webpage_url or canonical_url(info.video_id),
-        title=safe_title(info.title),
+        schema=SCHEMA_VERSION,
+        provider=provider.name,
+        video_id=key.media_id,
+        url=info.webpage_url or "",
+        title=safe_title(provider.clean_title(info.title)),
         uploader=safe_title(info.uploader),
         upload_date=info.iso_upload_date,
         duration_ms=int(duration * 1000),

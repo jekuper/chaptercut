@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from chaptercut.bot.deliver import TooLargeError
-from chaptercut.cache.store import CacheStore
+from chaptercut.cache.store import CacheKey, CacheStore
 from chaptercut.pipeline.process import ProcessTimeout
 from chaptercut.pipeline.runner import AudioResult
 from chaptercut.pipeline.sink import ProgressSink
@@ -22,7 +22,7 @@ from chaptercut.queue.models import ExtractType, Job, JobState
 from chaptercut.queue.repository import Repository
 from chaptercut.queue.worker import Worker, _reason_for
 from chaptercut.settings import Settings
-from tests.conftest import make_manifest
+from tests.conftest import make_manifest, youtube_ref
 
 
 class FakeBot:
@@ -58,7 +58,7 @@ class FakePipeline:
             raise self.error
         return self.result
 
-    def evict_to_fit(self, order: list[str]) -> list[str]:
+    def evict_to_fit(self, order: list[CacheKey]) -> list[CacheKey]:
         return []
 
 
@@ -86,9 +86,15 @@ def stub_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("chaptercut.queue.worker.Delivery", FakeDelivery)
 
 
-def audio_result(cache: CacheStore, video_id: str = "aaaaaaaaaaa", cached: bool = False) -> Any:
-    manifest = make_manifest(video_id, tracks=2)
-    directory = cache.path_for(video_id)
+def audio_result(
+    cache: CacheStore,
+    video_id: str = "aaaaaaaaaaa",
+    cached: bool = False,
+    provider: str = "youtube",
+) -> Any:
+    manifest = make_manifest(video_id, tracks=2, provider=provider)
+    key = CacheKey(provider, video_id)
+    directory = cache.path_for(key)
     directory.mkdir(parents=True, exist_ok=True)
     tracks = []
     for track in manifest.tracks:
@@ -106,11 +112,12 @@ def audio_result(cache: CacheStore, video_id: str = "aaaaaaaaaaa", cached: bool 
         cover=None,
         zip_path=None,
         from_cache=cached,
+        key=key,
     )
 
 
 async def enqueue(repo: Repository, kind: ExtractType = ExtractType.AUDIO) -> Job:
-    request = await repo.create_request(111, 999, "https://youtu.be/aaaaaaaaaaa", "aaaaaaaaaaa")
+    request = await repo.create_request(youtube_ref("aaaaaaaaaaa"), user_id=111, chat_id=999)
     return await repo.enqueue(request, kind, status_msg_id=42)
 
 
@@ -247,7 +254,7 @@ async def test_a_fresh_result_is_recorded_in_the_cache_table(
     assert claimed is not None
     await worker._run_job(claimed)
 
-    entry = await repo.cache_entry("aaaaaaaaaaa")
+    entry = await repo.cache_entry(CacheKey("youtube", "aaaaaaaaaaa"))
     assert entry is not None
     assert entry["tracks"] == 2
     assert bot.messages == []

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from chaptercut.cache.store import CacheKey
+from chaptercut.providers.base import MediaRef
 from chaptercut.queue.models import ExtractType, JobState, Phase
 from chaptercut.queue.repository import Repository
 from chaptercut.util.timefmt import iso, utcnow
@@ -11,13 +13,18 @@ USER = 111
 CHAT = 999
 
 
-async def a_request(repo: Repository, user_id: int = USER, video_id: str = "aaaaaaaaaaa"):
-    return await repo.create_request(
-        user_id=user_id,
-        chat_id=CHAT,
-        url=f"https://www.youtube.com/watch?v={video_id}",
-        video_id=video_id,
+async def a_request(
+    repo: Repository,
+    user_id: int = USER,
+    video_id: str = "aaaaaaaaaaa",
+    provider: str = "youtube",
+):
+    ref = MediaRef(
+        provider=provider,
+        media_id=video_id,
+        url=f"https://example.invalid/{provider}/{video_id}",
     )
+    return await repo.create_request(ref, user_id=user_id, chat_id=CHAT)
 
 
 async def test_request_round_trip(repo: Repository) -> None:
@@ -189,9 +196,10 @@ async def test_queue_survives_reopening_the_database(data_dir: Path) -> None:
 
 async def test_cache_entry_bookkeeping(repo: Repository) -> None:
     manifest = make_manifest("aaaaaaaaaaa", tracks=3)
+    key = CacheKey("youtube", "aaaaaaaaaaa")
     await repo.record_cache_entry(manifest, size_bytes=4096)
 
-    entry = await repo.cache_entry("aaaaaaaaaaa")
+    entry = await repo.cache_entry(key)
     assert entry is not None
     assert entry["tracks"] == 3
     assert entry["bytes"] == 4096
@@ -199,13 +207,13 @@ async def test_cache_entry_bookkeeping(repo: Repository) -> None:
     assert await repo.cache_count() == 1
 
     first_served = entry["last_served_at"]
-    await repo.touch_cache_entry("aaaaaaaaaaa")
-    touched = await repo.cache_entry("aaaaaaaaaaa")
+    await repo.touch_cache_entry(key)
+    touched = await repo.cache_entry(key)
     assert touched is not None
     assert touched["last_served_at"] >= first_served
 
-    await repo.forget_cache_entry("aaaaaaaaaaa")
-    assert await repo.cache_entry("aaaaaaaaaaa") is None
+    await repo.forget_cache_entry(key)
+    assert await repo.cache_entry(key) is None
 
 
 async def test_record_cache_entry_is_idempotent(repo: Repository) -> None:
@@ -223,5 +231,45 @@ async def test_eviction_order_is_least_recently_served_first(repo: Repository) -
         "UPDATE cache_entries SET last_served_at = ? WHERE video_id = ?",
         ("2000-01-01T00:00:00Z", "bbbbbbbbbbb"),
     )
-    order = [row["video_id"] for row in await repo.cache_entries_by_age()]
-    assert order[0] == "bbbbbbbbbbb"
+    order = await repo.cache_keys_by_age()
+    assert order[0] == CacheKey("youtube", "bbbbbbbbbbb")
+
+
+async def test_the_provider_round_trips_on_requests_and_jobs(repo: Repository) -> None:
+    request = await a_request(repo, video_id="7123456789012345678", provider="tiktok")
+    assert request.provider == "tiktok"
+
+    loaded = await repo.get_request(request.req_id)
+    assert loaded is not None and loaded.provider == "tiktok"
+
+    job = await repo.enqueue(loaded, ExtractType.AUDIO)
+    reloaded = await repo.get_job(job.job_id)
+    assert reloaded is not None
+    assert reloaded.provider == "tiktok"
+    assert reloaded.video_id == "7123456789012345678"
+
+
+async def test_the_same_id_on_two_providers_gets_two_cache_rows(repo: Repository) -> None:
+    # The whole point of the composite key: ids are only unique within a site.
+    shared = "abc123"
+    await repo.record_cache_entry(make_manifest(shared, provider="youtube"), 10)
+    await repo.record_cache_entry(make_manifest(shared, provider="tiktok"), 20)
+
+    assert await repo.cache_count() == 2
+    assert await repo.cache_total_bytes() == 30
+
+    youtube = await repo.cache_entry(CacheKey("youtube", shared))
+    tiktok = await repo.cache_entry(CacheKey("tiktok", shared))
+    assert youtube is not None and youtube["bytes"] == 10
+    assert tiktok is not None and tiktok["bytes"] == 20
+
+
+async def test_forgetting_one_provider_leaves_the_other(repo: Repository) -> None:
+    shared = "abc123"
+    await repo.record_cache_entry(make_manifest(shared, provider="youtube"), 10)
+    await repo.record_cache_entry(make_manifest(shared, provider="tiktok"), 20)
+
+    await repo.forget_cache_entry(CacheKey("youtube", shared))
+
+    assert await repo.cache_entry(CacheKey("youtube", shared)) is None
+    assert await repo.cache_entry(CacheKey("tiktok", shared)) is not None

@@ -14,7 +14,8 @@ from chaptercut.bot.factory import create_bot, create_dispatcher
 from chaptercut.cache.store import CacheStore
 from chaptercut.logging import configure_logging, get_logger
 from chaptercut.pipeline.runner import Pipeline
-from chaptercut.pipeline.ytdlp import Ytdlp
+from chaptercut.pipeline.ytdlp import YtdlpFactory
+from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.repository import Repository
 from chaptercut.queue.worker import Worker
 from chaptercut.settings import Settings, load_settings
@@ -63,11 +64,13 @@ async def amain() -> int:
     requeued = await repo.requeue_interrupted()
     await repo.purge_expired_requests()
 
-    ytdlp = Ytdlp(
-        cookies_file=settings.active_cookies_file(),
+    registry = ProviderRegistry.enabled(settings.enabled_providers)
+    ytdlp = YtdlpFactory(
+        data_dir=settings.data_dir,
+        default_cookies=settings.active_cookies_file(),
         extra_args=settings.ytdlp_extra_arg_list,
     )
-    pipeline = Pipeline(settings, ytdlp, cache)
+    pipeline = Pipeline(settings, ytdlp, cache, registry)
 
     bot = create_bot(settings)
     worker = Worker(settings, repo, pipeline, cache, bot)
@@ -78,6 +81,7 @@ async def amain() -> int:
         cache=cache,
         ytdlp=ytdlp,
         pipeline=pipeline,
+        registry=registry,
     )
 
     log.info(
@@ -85,7 +89,8 @@ async def amain() -> int:
         api=settings.bot_api_url,
         local=settings.bot_api_local,
         requeued=len(requeued),
-        cookies=settings.active_cookies_file() is not None,
+        providers=registry.names,
+        cookies=[p.name for p in registry if ytdlp.cookies_for(p.name) is not None],
     )
 
     worker.start()
