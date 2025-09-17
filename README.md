@@ -1,7 +1,8 @@
 # chaptercut
 
-A private Telegram bot that turns a YouTube link into properly tagged MP3s,
-split along the video's chapter markers, or into a downloaded video file.
+A private Telegram bot that turns a YouTube or TikTok link into properly
+tagged MP3s, split along the video's chapter markers, or into a downloaded
+video file.
 
 Paste a link, pick `Audio` or `Video`, get the result back in the chat.
 
@@ -16,13 +17,16 @@ bot   [ Some Album.zip ]  12 tracks, 68.4 MB
 
 ## What it does
 
+- Takes **YouTube** and **TikTok** links, for both audio and video. Adding
+  another site is one file: see [docs/providers.md](docs/providers.md).
 - Splits an album upload into one MP3 per chapter, stream-copied (no re-encode,
   no generation loss).
 - Writes full ID3v2.4 tags: title, artist, album, album artist, track number,
   year, cover art, plus the source URL and download date in their proper
   frames rather than smuggled into the album name.
-- Caches processed audio per video id, so the second request for the same
-  video is instant.
+- Caches processed audio per site and id, so the second request for the same
+  video is instant. Two different TikTok share links for one video converge on
+  a single cache entry.
 - Survives restarts: the job queue lives in SQLite, and interrupted jobs are
   re-queued on the next start.
 - Downloads video at a quality you pick from the actual available formats.
@@ -70,6 +74,10 @@ a throwaway Google account and drop it in the data volume at
 `CC_COOKIES_FILE`. The bot reads it, never writes it, never logs it, and
 `/cookies` reports only its age and size.
 
+Each site can have its own jar: `cookies-tiktok.txt` in the data volume takes
+precedence over the shared one for TikTok requests. TikTok generally needs no
+cookies for public videos.
+
 ## Development
 
 ```bash
@@ -79,9 +87,13 @@ just lint
 ```
 
 Layout: `bot/` talks to Telegram, `queue/` owns the SQLite job queue, `cache/`
-owns the on-disk result cache, and `pipeline/` does the work. `pipeline/` never
-imports `bot/`; it reports progress through a `ProgressSink` protocol, so the
-whole thing runs headless under test.
+owns the on-disk result cache, `providers/` knows the source sites, and
+`pipeline/` does the work. `pipeline/` never imports `bot/`; it reports
+progress through a `ProgressSink` protocol, so the whole thing runs headless
+under test.
+
+To support another site, write a `Provider` and add it to `ALL_PROVIDERS`.
+Nothing else needs to change; see [docs/providers.md](docs/providers.md).
 
 ## Settings
 
@@ -96,7 +108,8 @@ Every setting is an environment variable with the `CC_` prefix; see
 | `CC_ALLOWED_USER_IDS` | required | Comma-separated Telegram user ids |
 | `CC_ADMIN_USER_IDS` | required | Subset allowed to use `/cache` and `/cookies` |
 | `CC_DATA_DIR` | `/data` | Runtime volume |
-| `CC_COOKIES_FILE` | `/data/cookies.txt` | Optional yt-dlp cookie jar |
+| `CC_COOKIES_FILE` | `/data/cookies.txt` | Optional yt-dlp cookie jar; `cookies-<site>.txt` overrides per site |
+| `CC_ENABLED_PROVIDERS` | empty (all) | Limit to certain sites, e.g. `youtube` |
 | `CC_YTDLP_EXTRA_ARGS` | empty | Extra yt-dlp CLI args |
 | `CC_AUDIO_BITRATE` | empty (VBR best) | e.g. `192K` |
 | `CC_AUDIO_MULTI_DELIVERY` | `zip` | `zip`, `individual`, or `both` |
@@ -109,7 +122,8 @@ Every setting is an environment variable with the `CC_` prefix; see
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md), and
+See [docs/architecture.md](docs/architecture.md),
+[docs/providers.md](docs/providers.md), and
 [docs/lessons-learned.md](docs/lessons-learned.md) for the predecessor's
 mistakes this rewrite exists to avoid.
 

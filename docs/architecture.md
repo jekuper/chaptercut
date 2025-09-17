@@ -18,7 +18,7 @@ Telegram user  <-HTTPS->  telegram-bot-api (self-hosted, --local)  <-MTProto->  
                           +----------+-----------+
                                      |
                           /data volume
-                            cache/<video_id>/   manifest.json + tracks + cover.jpg
+                            cache/<prov>-<id>/  manifest.json + tracks + cover.jpg
                             work/<job_id>/      scratch, deleted after every job
                             chaptercut.db       requests, jobs, cache_entries
                             cookies.txt         operator-provided, read-only
@@ -45,11 +45,18 @@ On SIGTERM the bot stops polling, lets the running job finish for up to
 `CC_SHUTDOWN_GRACE_SECONDS`, then marks it interrupted and exits. Interrupted
 jobs are re-queued on the next start.
 
+## Providers
+
+`providers/` holds one small class per source site: how to recognise its links,
+what the id is, and what a canonical URL looks like. Nothing else in the system
+is site-specific. See [providers.md](providers.md).
+
 ## Dependency direction
 
-`bot/` may import `queue/`, `cache/`, and `pipeline/`. `pipeline/` must never
-import `bot/`: it reports progress through the `ProgressSink` protocol, so the
-whole pipeline runs headless under test with no aiogram involved.
+`bot/` may import `queue/`, `cache/`, and `pipeline/`. Both may import
+`providers/`, which is a leaf and imports nothing of ours. `pipeline/` must
+never import `bot/`: it reports progress through the `ProgressSink` protocol,
+so the whole pipeline runs headless under test with no aiogram involved.
 
 Delivery lives in `bot/deliver.py` rather than `pipeline/`, because sending
 files is a Telegram concern and the rule above is the one that matters.
@@ -90,11 +97,14 @@ re-runs yt-dlp.
 
 ## The cache
 
-A directory under `cache/<video_id>/` counts as cached only when it holds a
-valid `manifest.json` whose track files all exist. Results are built in
-`work/<job_id>/out/`, moved to `cache/<video_id>.tmp/`, given their manifest,
-and then renamed into place. The rename is atomic, so a crash can leave a
-`.tmp` directory but never a half-populated entry that looks valid.
+A directory under `cache/<provider>-<media_id>/` counts as cached only when it
+holds a valid `manifest.json` whose track files all exist. Results are built in
+`work/<job_id>/out/`, moved to a sibling `.tmp/` directory, given their
+manifest, and then renamed into place. The rename is atomic, so a crash can
+leave a `.tmp` directory but never a half-populated entry that looks valid.
+
+Keys are namespaced by provider, and `cache_entries` has a composite primary
+key for the same reason: a media id is only unique within one site.
 
 Startup sweeps `work/*`, every `cache/*.tmp`, and any cache directory without a
 valid manifest.
