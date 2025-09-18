@@ -28,9 +28,18 @@ branching anywhere in the code.
 3. Point the bot at the container: `CC_BOT_API_URL=http://bot-api:8081` and
    `CC_BOT_API_LOCAL=true`.
 
-Both containers mount the same `data` volume at `/data` and run as the same
-uid, because the path the bot sends must resolve identically on the server
-side, and both processes write there.
+Both containers mount the same host directory at `/data`, because the path the
+bot sends must resolve identically on the server side. It is a bind mount
+rather than a named volume: a named volume is created root-owned by whichever
+service mounts it first, which locks out the non-root bot. Create it once with
+
+```bash
+mkdir -p data && sudo chown -R 10001:10001 data
+```
+
+The bot runs as uid 10001 and is the only thing that writes there. The bot-api
+container stays root and mounts `/data` read-only, since it only ever reads the
+finished files the bot hands it by path.
 
 ## Migrating a token from the cloud server
 
@@ -60,8 +69,12 @@ The fix is operational, not a code change.
 
 1. Log into YouTube in a browser with a **throwaway** Google account.
 2. Export cookies in Netscape format with a browser extension.
-3. Place the file on the host at the path `CC_COOKIES_FILE` points to, inside
-   the data volume.
+3. Copy it into the data directory on the host: `cp cookies.txt data/`, then
+   `sudo chown 10001:10001 data/cookies.txt`. That is the path
+   `CC_COOKIES_FILE` points at inside the container.
+
+A per-site jar works the same way: `data/cookies-tiktok.txt` takes precedence
+over the shared one for TikTok.
 
 The bot reads the file, never writes it, never logs it, and never sends it
 anywhere but to yt-dlp on the local disk. `/cookies` reports only its size and

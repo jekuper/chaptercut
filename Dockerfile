@@ -29,5 +29,6 @@ RUN useradd --create-home --uid 10001 app \
  && chown -R app:app /app /data
 USER app
 
-VOLUME ["/data"]
+# No VOLUME for /data: compose bind-mounts a host directory there, and a
+# declared VOLUME would otherwise leave stray anonymous volumes behind.
 ENTRYPOINT ["python", "-m", "chaptercut"]

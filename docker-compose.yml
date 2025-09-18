@@ -6,10 +6,11 @@ services:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
       TELEGRAM_LOCAL: 1
-    # Same uid as the bot so both can read and write the shared volume.
-    user: "10001:10001"
+    # Left as root on purpose. It only ever reads /data (the bot hands it
+    # finished files by path), and it owns its own working volume. Forcing it
+    # to the bot's uid instead leaves it unable to write that volume.
     volumes:
-      - data:/data
+      - ./data:/data:ro
       - botapi:/var/lib/telegram-bot-api
     logging:
       driver: json-file
@@ -22,8 +23,13 @@ services:
     depends_on:
       - bot-api
     user: "10001:10001"
+    # A bind mount, not a named volume: a named volume is created root-owned
+    # by whichever service mounts it first, which locks out the non-root bot.
+    # A host directory also makes cookies.txt a plain cp and the cache easy to
+    # inspect and back up. Create it with:
+    #   mkdir -p data && sudo chown -R 10001:10001 data
     volumes:
-      - data:/data
+      - ./data:/data
     healthcheck:
       # The bot touches /data/heartbeat every 30 s; stale means wedged.
       test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /data/heartbeat) )) -lt 120"]
@@ -36,5 +42,4 @@ services:
       options: { max-size: "10m", max-file: "3" }
 
 volumes:
-  data: {}
   botapi: {}
