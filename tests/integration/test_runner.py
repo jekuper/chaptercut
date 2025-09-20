@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from mutagen.id3 import ID3
+from PIL import Image
 
 from chaptercut.cache.manifest import read_manifest
 from chaptercut.cache.store import CacheKey, CacheStore
@@ -485,3 +486,45 @@ async def test_youtube_and_tiktok_with_the_same_id_do_not_share_a_cache_entry(
     youtube_entry = cache.get(CacheKey("youtube", shared))
     assert youtube_entry is not None
     assert len(youtube_entry.manifest.tracks) == 3
+
+
+# --- cover art ---------------------------------------------------------------
+
+
+async def test_the_cover_is_embedded_and_a_telegram_thumbnail_is_produced(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    from chaptercut.pipeline.cover import THUMB_MAX_EDGE
+
+    pipeline, _ytdlp = build(settings, cache, tone_mp3, chapters=CHAPTERS)
+    result = await pipeline.run(a_job(), data_dir / "work" / "job1", RecordingSink())
+
+    assert isinstance(result, AudioResult)
+
+    # Full-size cover, embedded in every track.
+    assert result.cover is not None and result.cover.is_file()
+    for path in result.tracks:
+        apic = ID3(path).getall("APIC")
+        assert apic, f"{path.name} has no embedded cover"
+        assert apic[0].mime == "image/jpeg"
+
+    # Separate, smaller file for Telegram.
+    assert result.thumbnail is not None and result.thumbnail.is_file()
+    assert result.thumbnail != result.cover
+    with Image.open(result.thumbnail) as image:
+        assert max(image.size) <= THUMB_MAX_EDGE
+    assert result.thumbnail.stat().st_size < 200 * 1024
+
+
+async def test_a_cache_hit_still_gets_a_thumbnail(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    # The thumbnail lives in the scratch dir, so it has to be rebuilt each run.
+    pipeline, _ytdlp = build(settings, cache, tone_mp3, chapters=CHAPTERS)
+    await pipeline.run(a_job(), data_dir / "work" / "job1", RecordingSink())
+
+    second = await pipeline.run(a_job(), data_dir / "work" / "job2", RecordingSink())
+
+    assert isinstance(second, AudioResult)
+    assert second.from_cache is True
+    assert second.thumbnail is not None and second.thumbnail.is_file()

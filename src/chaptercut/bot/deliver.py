@@ -71,7 +71,7 @@ class Delivery:
             title=track.title,
             performer=result.uploader,
             duration=int((track.end_ms - track.start_ms) / 1000),
-            thumbnail=FSInputFile(result.cover) if result.cover else None,
+            thumbnail=FSInputFile(result.thumbnail) if result.thumbnail else None,
             caption=texts.audio_caption(
                 result.title, result.uploader, result.track_count, result.total_bytes
             ),
@@ -87,7 +87,7 @@ class Delivery:
                 result.title, result.uploader, result.track_count, zip_path.stat().st_size
             ),
             parse_mode="HTML",
-            thumbnail=FSInputFile(result.cover) if result.cover else None,
+            thumbnail=FSInputFile(result.thumbnail) if result.thumbnail else None,
         )
 
     async def _send_tracks(self, result: AudioResult) -> list[Message]:
@@ -101,7 +101,7 @@ class Delivery:
                     title=track.title,
                     performer=result.uploader,
                     duration=int((track.end_ms - track.start_ms) / 1000),
-                    thumbnail=FSInputFile(result.cover) if result.cover else None,
+                    thumbnail=FSInputFile(result.thumbnail) if result.thumbnail else None,
                 )
             )
         return sent

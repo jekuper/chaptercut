@@ -52,6 +52,7 @@ class AudioResult:
     directory: Path
     tracks: list[Path]
     cover: Path | None
+    thumbnail: Path | None
     zip_path: Path | None
     from_cache: bool
     key: CacheKey
@@ -179,6 +180,7 @@ class Pipeline:
             directory=entry.directory,
             tracks=entry.track_paths,
             cover=entry.cover_path,
+            thumbnail=await self._thumbnail(entry, paths),
             zip_path=zip_path,
             from_cache=False,
             key=entry.key,
@@ -200,10 +202,15 @@ class Pipeline:
             directory=cached.directory,
             tracks=cached.track_paths,
             cover=cached.cover_path,
+            thumbnail=await self._thumbnail(cached, paths),
             zip_path=zip_path,
             from_cache=True,
             key=cached.key,
         )
+
+    async def _thumbnail(self, entry: CachedResult, paths: JobPaths) -> Path | None:
+        """Telegram will not take the full-size cover, so shrink a copy."""
+        return await cover_art.make_thumbnail(entry.cover_path, paths.root / cover_art.THUMB_NAME)
 
     async def _package(
         self, entry: CachedResult, paths: JobPaths, sink: ProgressSink
@@ -300,7 +307,11 @@ class Pipeline:
         )
 
         thumbnail = await cover_art.fetch_and_normalize(
-            info.thumbnail_url, paths.root / "thumb.jpg", square=False
+            info.thumbnail_url,
+            paths.root / cover_art.THUMB_NAME,
+            square=False,
+            max_edge=cover_art.THUMB_MAX_EDGE,
+            quality=cover_art.THUMB_QUALITY,
         )
         duration = info.duration or 0.0
         return VideoResult(

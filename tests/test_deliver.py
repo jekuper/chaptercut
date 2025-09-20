@@ -46,6 +46,8 @@ def audio_result(tmp_path: Path, tracks: int, with_zip: bool, size: int = 1024) 
         paths.append(path)
     cover = directory / "cover.jpg"
     cover.write_bytes(b"jpeg")
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"jpeg")
 
     zip_path = None
     if with_zip:
@@ -61,6 +63,7 @@ def audio_result(tmp_path: Path, tracks: int, with_zip: bool, size: int = 1024) 
         directory=directory,
         tracks=paths,
         cover=cover,
+        thumbnail=thumbnail,
         zip_path=zip_path,
         from_cache=False,
         key=CacheKey("youtube", "dQw4w9WgXcQ"),
@@ -178,3 +181,29 @@ async def test_captions_are_html_escaped(tmp_path: Path) -> None:
     await delivery(bot).send_audio_result(result)
     assert "<script>" not in bot.audio[0]["caption"]
     assert "&lt;script&gt;" in bot.audio[0]["caption"]
+
+
+async def test_telegram_gets_the_small_thumbnail_not_the_full_cover(tmp_path: Path) -> None:
+    # The cover is up to 1000x1000; Telegram rejects anything over 320x320.
+    bot = RecordingBot()
+    result = audio_result(tmp_path, tracks=1, with_zip=False)
+    await delivery(bot).send_audio_result(result)
+
+    assert result.thumbnail is not None
+    assert bot.audio[0]["thumbnail"].path == result.thumbnail
+    assert bot.audio[0]["thumbnail"].path != result.cover
+
+
+async def test_the_zip_also_carries_the_small_thumbnail(tmp_path: Path) -> None:
+    bot = RecordingBot()
+    result = audio_result(tmp_path, tracks=3, with_zip=True)
+    await delivery(bot).send_audio_result(result)
+    assert bot.documents[0]["thumbnail"].path == result.thumbnail
+
+
+async def test_a_missing_thumbnail_is_not_fatal(tmp_path: Path) -> None:
+    bot = RecordingBot()
+    result = audio_result(tmp_path, tracks=1, with_zip=False)
+    result.thumbnail = None
+    await delivery(bot).send_audio_result(result)
+    assert bot.audio[0]["thumbnail"] is None

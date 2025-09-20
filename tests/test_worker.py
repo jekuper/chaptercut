@@ -110,6 +110,7 @@ def audio_result(
         directory=directory,
         tracks=tracks,
         cover=None,
+        thumbnail=None,
         zip_path=None,
         from_cache=cached,
         key=key,
