@@ -1,0 +1,40 @@
+# The file server runs on its own machine, separate from the bot.
+#
+#   cd chaptercut
+#   ./fileserver/gen-cert.sh <this-machine-ip>
+#   cp fileserver/.env.example fileserver/.env && edit it
+#   mkdir -p fileserver/data && sudo chown -R 10001:10001 fileserver/data
+#   docker compose -f fileserver/docker-compose.yml up -d --build
+services:
+  filexchange:
+    build:
+      context: ..
+      dockerfile: fileserver/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    user: "10001:10001"
+    ports:
+      - "${FX_PORT:-8443}:8443"
+    volumes:
+      # Bind mounts, not named volumes: a named volume is created root-owned
+      # and would lock out the non-root process.
+      - ./data:/data
+      - ./certs:/certs:ro
+    healthcheck:
+      # Localhost liveness only. Verification is deliberately skipped here
+      # because the certificate is issued for the public IP, not for
+      # 127.0.0.1; this proves the process is serving, nothing more.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import ssl,urllib.request;
+          c=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); c.check_hostname=False;
+          c.verify_mode=ssl.CERT_NONE;
+          urllib.request.urlopen('https://127.0.0.1:8443/healthz',context=c,timeout=5)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

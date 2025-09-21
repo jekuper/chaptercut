@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 cookies.txt
+certs/
+*.pem
+*.crt
+*.key
+*.srl
 tokens.json
 *.db
 *.db-wal
