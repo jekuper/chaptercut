@@ -11,7 +11,7 @@ from chaptercut.logging import get_logger
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: list[str] = [
     # v1: requests, jobs, cache_entries
@@ -84,6 +84,15 @@ MIGRATIONS: list[str] = [
     DROP TABLE cache_entries;
     ALTER TABLE cache_entries_v2 RENAME TO cache_entries;
     CREATE INDEX IF NOT EXISTS cache_served_idx ON cache_entries(last_served_at);
+    """,
+    # v3: where a finished job is delivered. Existing rows predate the choice,
+    # so Telegram is the only answer that could have applied to them.
+    """
+    ALTER TABLE requests ADD COLUMN destination TEXT NOT NULL DEFAULT 'telegram';
+    ALTER TABLE jobs     ADD COLUMN destination TEXT NOT NULL DEFAULT 'telegram';
+    -- The quality is picked before the destination, so it has to outlive the
+    -- keyboard that asked for it.
+    ALTER TABLE requests ADD COLUMN format_id TEXT;
     """,
 ]
 

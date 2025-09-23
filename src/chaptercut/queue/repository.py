@@ -18,7 +18,14 @@ from chaptercut.cache.store import CacheKey
 from chaptercut.logging import get_logger
 from chaptercut.providers.base import MediaRef
 from chaptercut.queue.db import connect
-from chaptercut.queue.models import ExtractType, Job, JobState, Phase, Request
+from chaptercut.queue.models import (
+    Destination,
+    ExtractType,
+    Job,
+    JobState,
+    Phase,
+    Request,
+)
 from chaptercut.util.timefmt import iso, utcnow
 
 log = get_logger(__name__)
@@ -99,6 +106,17 @@ class Repository:
             (extract_type.value, req_id),
         )
 
+    async def set_request_destination(self, req_id: str, destination: Destination) -> None:
+        await self.conn.execute(
+            "UPDATE requests SET destination = ? WHERE req_id = ?",
+            (destination.value, req_id),
+        )
+
+    async def set_request_format_choice(self, req_id: str, format_id: str) -> None:
+        await self.conn.execute(
+            "UPDATE requests SET format_id = ? WHERE req_id = ?", (format_id, req_id)
+        )
+
     async def set_request_formats(self, req_id: str, formats_json: str) -> None:
         await self.conn.execute(
             "UPDATE requests SET formats_json = ? WHERE req_id = ?",
@@ -127,6 +145,7 @@ class Repository:
             chat_id=request.chat_id,
             status_msg_id=status_msg_id,
             kind=kind,
+            destination=request.destination,
             provider=request.provider,
             video_id=request.video_id,
             url=request.url,
@@ -137,10 +156,10 @@ class Repository:
         )
         await self.conn.execute(
             """INSERT INTO jobs
-               (job_id, req_id, user_id, chat_id, status_msg_id, kind, provider,
-                video_id, url, format_id, state, phase, error, created_at,
-                started_at, finished_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)""",
+               (job_id, req_id, user_id, chat_id, status_msg_id, kind, destination,
+                provider, video_id, url, format_id, state, phase, error,
+                created_at, started_at, finished_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)""",
             (
                 job.job_id,
                 job.req_id,
@@ -148,6 +167,7 @@ class Repository:
                 job.chat_id,
                 job.status_msg_id,
                 job.kind.value,
+                job.destination.value,
                 job.provider,
                 job.video_id,
                 job.url,

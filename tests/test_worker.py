@@ -7,6 +7,7 @@ messages, and the restart re-queue, not the media processing itself.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +19,11 @@ from chaptercut.pipeline.process import ProcessTimeout
 from chaptercut.pipeline.runner import AudioResult
 from chaptercut.pipeline.sink import ProgressSink
 from chaptercut.pipeline.ytdlp import YtdlpError
-from chaptercut.queue.models import ExtractType, Job, JobState
+from chaptercut.queue.models import Destination, ExtractType, Job, JobState
 from chaptercut.queue.repository import Repository
 from chaptercut.queue.worker import Worker, _reason_for
 from chaptercut.settings import Settings
+from chaptercut.util.timefmt import utcnow
 from tests.conftest import make_manifest, youtube_ref
 
 
@@ -329,3 +331,169 @@ def test_failure_reasons_are_short_and_actionable(error: Exception, expected: st
 def test_failure_reasons_never_leak_stderr() -> None:
     error = YtdlpError("download failed", stderr="Traceback: /home/user/secret/path")
     assert "secret" not in _reason_for(error)
+
+
+# --- delivery destinations ----------------------------------------------------
+
+
+class FakeFileServer:
+    def __init__(self, fail: Exception | None = None) -> None:
+        self.uploaded: list[Path] = []
+        self.fail = fail
+
+    async def upload(self, path: Path, filename: str | None = None, on_progress: Any = None):
+        if self.fail is not None:
+            raise self.fail
+        self.uploaded.append(path)
+        from chaptercut.bot.fileserver import RemoteFile
+
+        return RemoteFile(
+            url=f"https://files.invalid/d/tok/{path.name}",
+            token="tok",
+            filename=path.name,
+            size=path.stat().st_size if path.is_file() else 0,
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+
+
+def build_worker_with_server(
+    settings: Settings, repo: Repository, cache: CacheStore, pipeline: Any, server: Any
+) -> tuple[Worker, FakeBot]:
+    bot = FakeBot()
+    return Worker(settings, repo, pipeline, cache, bot, server), bot  # pyright: ignore[reportArgumentType]
+
+
+async def enqueue_to(
+    repo: Repository, destination: Destination, kind: ExtractType = ExtractType.AUDIO
+) -> Job:
+    request = await repo.create_request(youtube_ref("aaaaaaaaaaa"), user_id=111, chat_id=999)
+    await repo.set_request_destination(request.req_id, destination)
+    request.destination = destination
+    return await repo.enqueue(request, kind, status_msg_id=42)
+
+
+async def test_choosing_the_server_uploads_and_sends_a_link(
+    settings: Settings, repo: Repository, cache: CacheStore
+) -> None:
+    await enqueue_to(repo, Destination.SERVER)
+    result = audio_result(cache)
+    server = FakeFileServer()
+    worker, bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=result), server
+    )
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    assert len(server.uploaded) == 1
+    assert FakeDelivery.instances[0].audio_sent == 0
+    assert any("https://files.invalid/d/tok/" in message for message in bot.messages)
+
+
+async def test_choosing_telegram_does_not_touch_the_server(
+    settings: Settings, repo: Repository, cache: CacheStore
+) -> None:
+    await enqueue_to(repo, Destination.TELEGRAM)
+    server = FakeFileServer()
+    worker, _bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=audio_result(cache)), server
+    )
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    assert server.uploaded == []
+    assert FakeDelivery.instances[0].audio_sent == 1
+
+
+async def test_too_big_for_telegram_falls_back_to_the_server(
+    settings: Settings, repo: Repository, cache: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reason the server exists: over the limit is a reroute, not a failure.
+    await enqueue_to(repo, Destination.TELEGRAM)
+    server = FakeFileServer()
+    worker, bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=audio_result(cache)), server
+    )
+
+    async def refuse(self: Any, result: Any) -> None:
+        raise TooLargeError(2_000_000_000, 1_900_000_000)
+
+    monkeypatch.setattr(FakeDelivery, "send_audio_result", refuse)
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    job = await repo.get_job(claimed.job_id)
+    assert job is not None and job.state is JobState.DONE
+    assert len(server.uploaded) == 1
+    assert any("Too big for Telegram" in message for message in bot.messages)
+
+
+async def test_without_a_server_too_big_is_still_a_failure(
+    settings: Settings, repo: Repository, cache: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await enqueue_to(repo, Destination.TELEGRAM)
+    worker, _bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=audio_result(cache)), None
+    )
+
+    async def refuse(self: Any, result: Any) -> None:
+        raise TooLargeError(2_000_000_000, 1_900_000_000)
+
+    monkeypatch.setattr(FakeDelivery, "send_audio_result", refuse)
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    job = await repo.get_job(claimed.job_id)
+    assert job is not None
+    assert job.state is JobState.FAILED
+    assert "over the" in (job.error or "")
+
+
+async def test_an_upload_failure_fails_the_job_with_a_clear_reason(
+    settings: Settings, repo: Repository, cache: CacheStore
+) -> None:
+    from chaptercut.bot.fileserver import FileServerError
+
+    await enqueue_to(repo, Destination.SERVER)
+    server = FakeFileServer(fail=FileServerError("could not reach the file server"))
+    worker, _bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=audio_result(cache)), server
+    )
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    job = await repo.get_job(claimed.job_id)
+    assert job is not None
+    assert job.state is JobState.FAILED
+    assert job.error == "could not reach the file server"
+
+
+async def test_the_server_gets_the_zip_for_a_multi_track_result(
+    settings: Settings, repo: Repository, cache: CacheStore, tmp_path: Path
+) -> None:
+    # One link, not one per track.
+    await enqueue_to(repo, Destination.SERVER)
+    result = audio_result(cache)
+    zip_path = tmp_path / "Test Album.zip"
+    zip_path.write_bytes(b"zip")
+    result.zip_path = zip_path
+
+    server = FakeFileServer()
+    worker, _bot = build_worker_with_server(
+        settings, repo, cache, FakePipeline(result=result), server
+    )
+
+    claimed = await repo.claim_next()
+    assert claimed is not None
+    await worker._run_job(claimed)
+
+    assert server.uploaded == [zip_path]

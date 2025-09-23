@@ -14,6 +14,7 @@ from chaptercut.bot.routers.commands import (
     cmd_cache,
     cmd_cancel,
     cmd_cookies,
+    cmd_files,
     cmd_help,
     cmd_start,
     cmd_status,
@@ -376,3 +377,139 @@ async def test_cache_purge_without_a_target_shows_usage(
 ) -> None:
     await cmd_cache(a_message(), command("purge"), repo, cache, registry, is_admin=True)
     assert "/cache purge" in replies[0]
+
+
+# --- /files -------------------------------------------------------------------
+
+
+class FakeFileServer:
+    def __init__(self, files: list[Any] | None = None, error: Exception | None = None) -> None:
+        self.files = files or []
+        self.error = error
+        self.purged: list[str] = []
+        self.flushed = 0
+
+    def _raise(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+    async def stats(self) -> Any:
+        self._raise()
+        from chaptercut.bot.fileserver import RemoteStats
+
+        return RemoteStats(
+            files=len(self.files),
+            bytes=sum(item.size for item in self.files),
+            retention_hours=24,
+        )
+
+    async def list_files(self) -> list[Any]:
+        self._raise()
+        return self.files
+
+    async def purge(self, token: str) -> bool:
+        self._raise()
+        if any(item.token == token for item in self.files):
+            self.purged.append(token)
+            return True
+        return False
+
+    async def purge_all(self) -> int:
+        self._raise()
+        self.flushed = len(self.files)
+        return self.flushed
+
+
+def a_remote(name: str, token: str, size: int = 1024) -> Any:
+    from chaptercut.bot.fileserver import RemoteFile
+
+    return RemoteFile(
+        url=f"https://f/d/{token}/{name}",
+        token=token,
+        filename=name,
+        size=size,
+        expires_at=None,
+    )
+
+
+async def test_files_is_admin_only(replies: list[str]) -> None:
+    await cmd_files(a_message(), command(None), FakeFileServer(), is_admin=False)  # pyright: ignore[reportArgumentType]
+    assert replies == ["That command is for admins."]
+
+
+async def test_files_without_a_server_says_so(replies: list[str]) -> None:
+    await cmd_files(a_message(), command(None), None, is_admin=True)
+    assert replies == ["The file server is not configured."]
+
+
+async def test_files_lists_what_is_stored(replies: list[str]) -> None:
+    server = FakeFileServer([a_remote("a.zip", "tok1", 10), a_remote("b.mp3", "tok2", 20)])
+    await cmd_files(a_message(), command(None), server, is_admin=True)  # pyright: ignore[reportArgumentType]
+
+    assert "2 file(s)" in replies[0]
+    assert "a.zip" in replies[0]
+    assert "tok2" in replies[0]
+
+
+async def test_files_reports_an_empty_server(replies: list[str]) -> None:
+    await cmd_files(a_message(), command(None), FakeFileServer(), is_admin=True)  # pyright: ignore[reportArgumentType]
+    assert "Nothing on the file server." in replies[0]
+
+
+async def test_files_purge_one(replies: list[str]) -> None:
+    server = FakeFileServer([a_remote("a.zip", "tok1")])
+    await cmd_files(a_message(), command("purge tok1"), server, is_admin=True)  # pyright: ignore[reportArgumentType]
+
+    assert server.purged == ["tok1"]
+    assert "Deleted tok1" in replies[0]
+
+
+async def test_files_purge_something_absent(replies: list[str]) -> None:
+    await cmd_files(a_message(), command("purge nope"), FakeFileServer(), is_admin=True)  # pyright: ignore[reportArgumentType]
+    assert "No such file: nope" in replies[0]
+
+
+async def test_files_flush_everything(replies: list[str]) -> None:
+    server = FakeFileServer([a_remote("a.zip", "tok1"), a_remote("b.zip", "tok2")])
+    await cmd_files(a_message(), command("purge all"), server, is_admin=True)  # pyright: ignore[reportArgumentType]
+
+    assert server.flushed == 2
+    assert replies[0] == "Flushed 2 file(s) from the server."
+
+
+async def test_files_rejects_an_unknown_subcommand(replies: list[str]) -> None:
+    await cmd_files(a_message(), command("explode"), FakeFileServer(), is_admin=True)  # pyright: ignore[reportArgumentType]
+    assert "/files purge" in replies[0]
+
+
+async def test_a_down_server_does_not_break_the_command(replies: list[str]) -> None:
+    from chaptercut.bot.fileserver import FileServerError
+
+    server = FakeFileServer(error=FileServerError("could not reach the file server"))
+    await cmd_files(a_message(), command(None), server, is_admin=True)  # pyright: ignore[reportArgumentType]
+
+    assert "File server error" in replies[0]
+    assert "could not reach" in replies[0]
+
+
+async def test_status_reports_the_file_server(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    server = FakeFileServer([a_remote("a.zip", "tok1", 10)])
+    await cmd_status(
+        a_message(),
+        repo,
+        FakeWorker(),
+        cache,
+        FakeYtdlp(),
+        registry,
+        server,  # pyright: ignore[reportArgumentType]
+    )
+    assert "File server: ok, 1 file(s)" in replies[0]
+
+
+async def test_status_says_when_the_file_server_is_absent(
+    repo: Repository, cache: CacheStore, replies: list[str], registry: ProviderRegistry
+) -> None:
+    await cmd_status(a_message(), repo, FakeWorker(), cache, FakeYtdlp(), registry, None)  # pyright: ignore[reportArgumentType]
+    assert "File server: not configured" in replies[0]

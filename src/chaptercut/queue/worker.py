@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiogram import Bot
@@ -16,6 +18,7 @@ from aiogram.exceptions import TelegramAPIError
 
 from chaptercut.bot import texts
 from chaptercut.bot.deliver import Delivery, TooLargeError
+from chaptercut.bot.fileserver import FileServerClient, FileServerError
 from chaptercut.bot.progress import StatusMessage
 from chaptercut.cache.store import CacheStore
 from chaptercut.logging import get_logger
@@ -24,9 +27,10 @@ from chaptercut.pipeline.process import ProcessTimeout
 from chaptercut.pipeline.runner import AudioResult, Pipeline, PipelineError, VideoResult
 from chaptercut.pipeline.sink import NullSink, ProgressSink
 from chaptercut.pipeline.ytdlp import YtdlpError
-from chaptercut.queue.models import Job, JobState, Phase
+from chaptercut.queue.models import Destination, Job, JobState, Phase
 from chaptercut.settings import Settings
 from chaptercut.util.paths import rmtree_quiet
+from chaptercut.util.timefmt import format_bytes, utcnow
 
 if TYPE_CHECKING:
     from chaptercut.queue.repository import Repository
@@ -44,12 +48,14 @@ class Worker:
         pipeline: Pipeline,
         cache: CacheStore,
         bot: Bot,
+        fileserver: FileServerClient | None = None,
     ) -> None:
         self.settings = settings
         self.repo = repo
         self.pipeline = pipeline
         self.cache = cache
         self.bot = bot
+        self.fileserver = fileserver
         self._wakeup = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._current: Job | None = None
@@ -148,16 +154,57 @@ class Worker:
             max_send_bytes=self.settings.max_send_bytes,
             multi_mode=self.settings.audio_multi_delivery,
         )
-        if isinstance(result, AudioResult):
-            if result.from_cache:
-                await self.bot.send_message(job.chat_id, texts.CACHE_HIT)
-            await delivery.send_audio_result(result)
-            await self._record_cache(result)
+        if isinstance(result, AudioResult) and result.from_cache:
+            await self.bot.send_message(job.chat_id, texts.CACHE_HIT)
+
+        if job.destination is Destination.SERVER:
+            await self._deliver_via_server(job, result, status)
         else:
-            await delivery.send_video_result(result)
+            try:
+                if isinstance(result, AudioResult):
+                    await delivery.send_audio_result(result)
+                else:
+                    await delivery.send_video_result(result)
+            except TooLargeError as exc:
+                # The whole reason the file server exists: over the limit is a
+                # reroute, not a failure, whenever there is somewhere to route to.
+                if self.fileserver is None:
+                    raise
+                log.info("deliver.fallback", job_id=job.job_id, bytes=exc.size)
+                await self.bot.send_message(
+                    job.chat_id,
+                    texts.FELL_BACK_TO_SERVER.format(size=format_bytes(exc.size)),
+                )
+                await self._deliver_via_server(job, result, status)
+
+        if isinstance(result, AudioResult):
+            await self._record_cache(result)
 
         if status is not None:
             await status.delete()
+
+    async def _deliver_via_server(
+        self,
+        job: Job,
+        result: AudioResult | VideoResult,
+        status: StatusMessage | None,
+    ) -> None:
+        if self.fileserver is None:
+            raise PipelineError(texts.SERVER_UNAVAILABLE)
+
+        path = _outgoing_path(result)
+        if path is None:
+            raise PipelineError("nothing to upload")
+
+        progress = _UploadProgress(status)
+        remote = await self.fileserver.upload(path, on_progress=progress.handle)
+        hours = _hours_until(remote.expires_at)
+        await self.bot.send_message(
+            job.chat_id,
+            texts.link_ready(result.title, remote.url, remote.size, hours),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
     async def _record_cache(self, result: AudioResult) -> None:
         size = sum(path.stat().st_size for path in result.tracks if path.is_file())
@@ -192,6 +239,40 @@ class Worker:
             pass
 
 
+def _outgoing_path(result: AudioResult | VideoResult) -> Path | None:
+    """The single file a direct link should point at."""
+    if isinstance(result, VideoResult):
+        return result.path
+    if result.zip_path is not None:
+        return result.zip_path
+    return result.tracks[0] if result.tracks else None
+
+
+def _hours_until(moment: datetime | None) -> int:
+    if moment is None:
+        return 0
+    return max(0, round((moment - utcnow()).total_seconds() / 3600))
+
+
+class _UploadProgress:
+    """Feeds upload percentages into the existing status message."""
+
+    def __init__(self, status: StatusMessage | None) -> None:
+        self.status = status
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def handle(self, sent: int, total: int) -> None:
+        if self.status is None or total <= 0:
+            return
+        task = asyncio.get_running_loop().create_task(self._emit(sent / total * 100))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _emit(self, pct: float) -> None:
+        if self.status is not None:
+            await self.status.update(Phase.UPLOAD, pct=pct, detail="direct link")
+
+
 def _reason_for(exc: Exception) -> str:
     """A short line the user can act on, never a stack trace or a raw stderr dump."""
     if isinstance(exc, TooLargeError):
@@ -200,6 +281,8 @@ def _reason_for(exc: Exception) -> str:
         return texts.FAILED_BOT_CHECK if exc.bot_check else str(exc)
     if isinstance(exc, ProcessTimeout):
         return texts.FAILED_TIMEOUT
+    if isinstance(exc, FileServerError):
+        return str(exc)
     if isinstance(exc, PipelineError | FfmpegError | ValueError):
         return str(exc)
     return "something went wrong on my side"

@@ -11,6 +11,7 @@ from types import FrameType
 from aiogram import Bot, Dispatcher
 
 from chaptercut.bot.factory import create_bot, create_dispatcher
+from chaptercut.bot.fileserver import FileServerClient
 from chaptercut.cache.store import CacheStore
 from chaptercut.logging import configure_logging, get_logger
 from chaptercut.pipeline.runner import Pipeline
@@ -72,8 +73,16 @@ async def amain() -> int:
     )
     pipeline = Pipeline(settings, ytdlp, cache, registry)
 
+    fileserver: FileServerClient | None = None
+    if settings.fileserver_enabled:
+        fileserver = FileServerClient(
+            base_url=settings.fileserver_url,
+            token=settings.fileserver_token.get_secret_value(),
+            ca_file=settings.fileserver_ca,
+        )
+
     bot = create_bot(settings)
-    worker = Worker(settings, repo, pipeline, cache, bot)
+    worker = Worker(settings, repo, pipeline, cache, bot, fileserver)
     dispatcher = create_dispatcher(
         settings,
         repo=repo,
@@ -82,6 +91,7 @@ async def amain() -> int:
         ytdlp=ytdlp,
         pipeline=pipeline,
         registry=registry,
+        fileserver=fileserver,
     )
 
     log.info(
@@ -90,6 +100,7 @@ async def amain() -> int:
         local=settings.bot_api_local,
         requeued=len(requeued),
         providers=registry.names,
+        fileserver=settings.fileserver_enabled,
         cookies=[p.name for p in registry if ytdlp.cookies_for(p.name) is not None],
     )
 

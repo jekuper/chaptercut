@@ -6,9 +6,9 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from chaptercut.bot import texts
-from chaptercut.bot.callbacks import BackCb, QualityCb, TypeCb
+from chaptercut.bot.callbacks import BackCb, DestCb, QualityCb, TypeCb
 from chaptercut.pipeline.formats import FormatOption
-from chaptercut.queue.models import ExtractType
+from chaptercut.queue.models import Destination, ExtractType
 
 
 def type_keyboard(req_id: str) -> InlineKeyboardMarkup:
@@ -18,6 +18,20 @@ def type_keyboard(req_id: str) -> InlineKeyboardMarkup:
     )
     builder.button(
         text=texts.BUTTON_VIDEO, callback_data=TypeCb(req_id=req_id, kind=ExtractType.VIDEO)
+    )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def destination_keyboard(req_id: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=texts.BUTTON_TELEGRAM,
+        callback_data=DestCb(req_id=req_id, where=Destination.TELEGRAM),
+    )
+    builder.button(
+        text=texts.BUTTON_SERVER,
+        callback_data=DestCb(req_id=req_id, where=Destination.SERVER),
     )
     builder.adjust(2)
     return builder.as_markup()

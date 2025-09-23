@@ -10,7 +10,7 @@ from aiogram import Router
 from aiogram.types import CallbackQuery, Message
 
 from chaptercut.bot import keyboards, texts
-from chaptercut.bot.callbacks import BackCb, QualityCb, TypeCb
+from chaptercut.bot.callbacks import BackCb, DestCb, QualityCb, TypeCb
 from chaptercut.logging import get_logger
 from chaptercut.pipeline.formats import find_option, select_video_formats
 from chaptercut.pipeline.ytdlp import YtdlpError, YtdlpFactory
@@ -18,6 +18,7 @@ from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.queue.models import ExtractType, Request
 from chaptercut.queue.repository import Repository
 from chaptercut.queue.worker import Worker
+from chaptercut.settings import Settings
 
 log = get_logger(__name__)
 
@@ -47,6 +48,7 @@ async def on_type(
     worker: Worker,
     ytdlp: YtdlpFactory,
     registry: ProviderRegistry,
+    settings: Settings,
 ) -> None:
     request = await _resolve(callback, repo, callback_data.req_id)
     if request is None:
@@ -55,7 +57,7 @@ async def on_type(
     await callback.answer()
 
     if callback_data.kind is ExtractType.AUDIO:
-        await _enqueue(callback, repo, worker, request, ExtractType.AUDIO)
+        await _ask_destination(callback, repo, worker, settings, request, ExtractType.AUDIO)
         return
     await _show_qualities(callback, repo, ytdlp, registry, request)
 
@@ -79,6 +81,7 @@ async def on_quality(
     callback_data: QualityCb,
     repo: Repository,
     worker: Worker,
+    settings: Settings,
 ) -> None:
     request = await _resolve(callback, repo, callback_data.req_id)
     if request is None:
@@ -88,8 +91,36 @@ async def on_quality(
         await _expired(callback)
         return
     await callback.answer()
+    await _ask_destination(
+        callback,
+        repo,
+        worker,
+        settings,
+        request,
+        ExtractType.VIDEO,
+        format_id=callback_data.format_id,
+    )
+
+
+@router.callback_query(DestCb.filter())
+async def on_destination(
+    callback: CallbackQuery,
+    callback_data: DestCb,
+    repo: Repository,
+    worker: Worker,
+) -> None:
+    request = await _resolve(callback, repo, callback_data.req_id)
+    if request is None:
+        return
+    if request.extract_type is None:
+        await _expired(callback)
+        return
+    await repo.set_request_destination(request.req_id, callback_data.where)
+    await callback.answer()
+
+    request.destination = callback_data.where
     await _enqueue(
-        callback, repo, worker, request, ExtractType.VIDEO, format_id=callback_data.format_id
+        callback, repo, worker, request, request.extract_type, format_id=request.chosen_format_id
     )
 
 
@@ -130,6 +161,37 @@ async def _show_qualities(
     await message.edit_text(
         texts.CHOOSE_QUALITY,
         reply_markup=keyboards.quality_keyboard(request.req_id, options),
+    )
+
+
+async def _ask_destination(
+    callback: CallbackQuery,
+    repo: Repository,
+    worker: Worker,
+    settings: Settings,
+    request: Request,
+    kind: ExtractType,
+    format_id: str | None = None,
+) -> None:
+    """Offer Telegram or a direct link.
+
+    With no file server configured there is only one possible answer, so the
+    step disappears rather than showing a keyboard with one button.
+    """
+    if format_id is not None:
+        await repo.set_request_format_choice(request.req_id, format_id)
+        request.chosen_format_id = format_id
+
+    if not settings.fileserver_enabled:
+        await _enqueue(callback, repo, worker, request, kind, format_id=format_id)
+        return
+
+    message = callback.message
+    if not isinstance(message, Message):
+        return
+    await message.edit_text(
+        texts.CHOOSE_DESTINATION,
+        reply_markup=keyboards.destination_keyboard(request.req_id),
     )
 
 

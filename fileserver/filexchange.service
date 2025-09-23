@@ -1,0 +1,50 @@
+# Install to /etc/systemd/system/filexchange.service
+# See fileserver/README.md for the full setup.
+[Unit]
+Description=filexchange file drop for chaptercut
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=filexchange
+Group=filexchange
+WorkingDirectory=/opt/filexchange
+
+# Read by systemd as root before dropping privileges, so this file can stay
+# 600 root:root and the service user never needs to read the token.
+EnvironmentFile=/etc/filexchange/filexchange.env
+
+ExecStart=/opt/filexchange/.venv/bin/python -m filexchange
+Restart=on-failure
+RestartSec=5
+
+# The service handles unauthenticated traffic from the internet, so it gets
+# only what it actually needs: one writable directory and a network socket.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/filexchange
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+# If the unit refuses to start with a cryptic error, drop this line first:
+# some Python extension modules will not load under it.
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

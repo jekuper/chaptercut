@@ -34,7 +34,11 @@ HELP = (
     "/help - this message"
 )
 
-HELP_ADMIN = "\n/cache - inspect or purge the cache\n/cookies - cookie file status"
+HELP_ADMIN = (
+    "\n/cache - inspect or purge the cache"
+    "\n/files - inspect or flush the file server"
+    "\n/cookies - cookie file status"
+)
 
 NOT_A_LINK = (
     "That is not a link I recognise.\n"
@@ -47,6 +51,7 @@ MULTIPLE_LINKS = "Found several links. Processing the first one; send the others
 CHOOSE_TYPE = "What do you want from <b>{title}</b>?"
 CHOOSE_TYPE_PLAIN = "What do you want from this video?"
 CHOOSE_QUALITY = "Pick a quality:"
+CHOOSE_DESTINATION = "Where should it go?"
 
 FETCHING_FORMATS = "Checking available qualities..."
 NO_FORMATS = "No downloadable video formats were listed for this link."
@@ -74,6 +79,19 @@ FAILED_TOO_LARGE = (
     "Try the audio instead, or a lower video quality."
 )
 FAILED_TIMEOUT = "The download took too long and was stopped."
+
+LINK_READY = "<b>{title}</b>\n{size} - expires in {hours}h\n{url}"
+FELL_BACK_TO_SERVER = "Too big for Telegram ({size}), so here is a direct link instead."
+SERVER_UNAVAILABLE = "The file server is not configured."
+
+FILES_USAGE_LINE = "File server: {count} file(s), {size}, kept {hours}h"
+FILES_EMPTY = "Nothing on the file server."
+FILES_ENTRY = "{filename} - {size} - {token}"
+FILES_PURGED_ALL = "Flushed {count} file(s) from the server."
+FILES_PURGED = "Deleted {token}."
+FILES_NOT_FOUND = "No such file: {token}"
+FILES_USAGE_HELP = "Usage: /files | /files purge &lt;token&gt; | /files purge all"
+FILES_ERROR = "File server error: {reason}"
 
 ADMIN_ONLY = "That command is for admins."
 
@@ -104,6 +122,8 @@ PHASE_LABELS = {
 BUTTON_AUDIO = "Audio"
 BUTTON_VIDEO = "Video"
 BUTTON_BACK = "Back"
+BUTTON_TELEGRAM = "Telegram"
+BUTTON_SERVER = "Direct link"
 
 QUALITY_LABEL = "{height}p - {ext} - ~{size}"
 QUALITY_LABEL_NO_SIZE = "{height}p - {ext}"
@@ -132,6 +152,7 @@ def status_text(
     ytdlp_version: str,
     ffmpeg_ok: bool,
     providers: list[str],
+    fileserver: str = "not configured",
 ) -> str:
     lines = [
         f"Queue: {queue_length} waiting",
@@ -141,6 +162,7 @@ def status_text(
         f"yt-dlp: {ytdlp_version}",
         f"ffmpeg: {'ok' if ffmpeg_ok else 'MISSING'}",
         f"Sites: {', '.join(providers)}",
+        f"File server: {esc(fileserver)}",
     ]
     return "\n".join(lines)
 
@@ -172,6 +194,18 @@ def queued_text(title: str, position: int) -> str:
 
 def choose_type_text(title: str) -> str:
     return CHOOSE_TYPE.format(title=esc(title)) if title else CHOOSE_TYPE_PLAIN
+
+
+def link_ready(title: str, url: str, size_bytes: int, hours: int) -> str:
+    return LINK_READY.format(
+        title=esc(title), size=format_bytes(size_bytes), hours=hours, url=esc(url)
+    )
+
+
+def files_entry(filename: str, size_bytes: int, token: str) -> str:
+    return FILES_ENTRY.format(
+        filename=esc(filename), size=format_bytes(size_bytes), token=esc(token)
+    )
 
 
 def quality_label(height: int, ext: str, size_bytes: int | None) -> str:

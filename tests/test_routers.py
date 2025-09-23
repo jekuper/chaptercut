@@ -11,17 +11,19 @@ from typing import Any
 
 import pytest
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, User
+from pydantic import SecretStr
 
 from chaptercut.bot import keyboards
-from chaptercut.bot.callbacks import BackCb, QualityCb, TypeCb
-from chaptercut.bot.routers.choices import on_back, on_quality, on_type
+from chaptercut.bot.callbacks import BackCb, DestCb, QualityCb, TypeCb
+from chaptercut.bot.routers.choices import on_back, on_destination, on_quality, on_type
 from chaptercut.bot.routers.intake import handle_text
 from chaptercut.pipeline.formats import select_video_formats
 from chaptercut.pipeline.ytdlp import VideoInfo, YtdlpError
 from chaptercut.providers.registry import ProviderRegistry
 from chaptercut.providers.tiktok import TikTokProvider
-from chaptercut.queue.models import ExtractType, Request
+from chaptercut.queue.models import Destination, ExtractType, Request
 from chaptercut.queue.repository import Repository
+from chaptercut.settings import Settings
 from tests.conftest import youtube_ref
 
 USER = 111
@@ -153,7 +155,7 @@ def first_req_id(markup: InlineKeyboardMarkup | None) -> str:
 
 
 async def test_a_youtube_link_creates_a_request_and_offers_the_type_keyboard(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry)
 
@@ -163,7 +165,7 @@ async def test_a_youtube_link_creates_a_request_and_offers_the_type_keyboard(
 
 
 async def test_a_tiktok_link_creates_a_tiktok_request(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
         a_message(f"https://www.tiktok.com/@someone/video/{TIKTOK_ID}"), repo, registry
@@ -177,7 +179,7 @@ async def test_a_tiktok_link_creates_a_tiktok_request(
 
 
 async def test_a_tiktok_short_link_stores_the_code_for_later_resolution(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(a_message("https://vm.tiktok.com/ZMhqAbCdE/"), repo, registry)
 
@@ -189,7 +191,7 @@ async def test_a_tiktok_short_link_stores_the_code_for_later_resolution(
 
 
 async def test_tracking_parameters_never_reach_the_stored_url(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
         a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}?is_from_webapp=1&sender_device=pc"),
@@ -202,7 +204,7 @@ async def test_tracking_parameters_never_reach_the_stored_url(
 
 
 async def test_non_link_text_lists_the_sites_it_accepts(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(a_message("what is this"), repo, registry)
     assert "not a link I recognise" in sent.answers[0][0]
@@ -211,14 +213,14 @@ async def test_non_link_text_lists_the_sites_it_accepts(
 
 
 async def test_commands_are_left_to_the_command_router(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(a_message("/status"), repo, registry)
     assert sent.answers == []
 
 
 async def test_several_links_processes_the_first_and_says_so(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
         a_message(f"https://youtu.be/{VIDEO_ID} https://youtu.be/bbbbbbbbbbb"), repo, registry
@@ -228,7 +230,7 @@ async def test_several_links_processes_the_first_and_says_so(
 
 
 async def test_a_mixed_message_takes_the_first_link_whichever_site(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
         a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID} then https://youtu.be/{VIDEO_ID}"),
@@ -241,7 +243,7 @@ async def test_a_mixed_message_takes_the_first_link_whichever_site(
 
 
 async def test_two_links_in_flight_get_distinct_requests(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     # The predecessor's FSM state collided here and corrupted both dialogues.
     await handle_text(a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry)
@@ -268,7 +270,7 @@ async def test_a_disabled_provider_is_not_recognised(repo: Repository, sent: Sen
 
 
 async def test_choosing_audio_enqueues_a_job(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     worker = FakeWorker()
@@ -280,6 +282,7 @@ async def test_choosing_audio_enqueues_a_job(
         worker,  # pyright: ignore[reportArgumentType]
         FakeYtdlp(),  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
 
     assert await repo.queue_length() == 1
@@ -288,7 +291,7 @@ async def test_choosing_audio_enqueues_a_job(
 
 
 async def test_an_enqueued_job_carries_the_provider_and_canonical_url(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     ref = TikTokProvider().match(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}")
     assert ref is not None
@@ -301,6 +304,7 @@ async def test_an_enqueued_job_carries_the_provider_and_canonical_url(
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         FakeYtdlp(),  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
 
     jobs = await repo.queued_jobs_for_user(USER)
@@ -309,7 +313,7 @@ async def test_an_enqueued_job_carries_the_provider_and_canonical_url(
 
 
 async def test_choosing_video_shows_the_quality_keyboard(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     ytdlp = FakeYtdlp(formats=FORMATS)
@@ -321,6 +325,7 @@ async def test_choosing_video_shows_the_quality_keyboard(
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         ytdlp,  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
 
     labels = buttons(sent.edits[-1][1])
@@ -331,7 +336,7 @@ async def test_choosing_video_shows_the_quality_keyboard(
 
 
 async def test_format_listing_uses_the_requests_own_provider(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     ref = TikTokProvider().match(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}")
     assert ref is not None
@@ -345,27 +350,28 @@ async def test_format_listing_uses_the_requests_own_provider(
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         ytdlp,  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
 
     assert ytdlp.providers_seen == ["tiktok"]
 
 
 async def test_the_format_list_is_cached_on_the_request(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     ytdlp = FakeYtdlp(formats=FORMATS)
     callback_data = TypeCb(req_id=request.req_id, kind=ExtractType.VIDEO)
 
-    await on_type(a_callback(), callback_data, repo, FakeWorker(), ytdlp, registry)  # pyright: ignore[reportArgumentType]
-    await on_type(a_callback(), callback_data, repo, FakeWorker(), ytdlp, registry)  # pyright: ignore[reportArgumentType]
+    await on_type(a_callback(), callback_data, repo, FakeWorker(), ytdlp, registry, settings)  # pyright: ignore[reportArgumentType]
+    await on_type(a_callback(), callback_data, repo, FakeWorker(), ytdlp, registry, settings)  # pyright: ignore[reportArgumentType]
 
     # The second pass reuses the stored list instead of shelling out again.
     assert ytdlp.calls == 1
 
 
 async def test_a_bot_check_while_listing_formats_is_surfaced(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     ytdlp = FakeYtdlp(error=YtdlpError("blocked", bot_check=True))
@@ -377,11 +383,14 @@ async def test_a_bot_check_while_listing_formats_is_surfaced(
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         ytdlp,  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
     assert "signed-in session" in sent.edits[-1][0]
 
 
-async def test_no_formats_says_so(repo: Repository, sent: Sent, registry: ProviderRegistry) -> None:
+async def test_no_formats_says_so(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
+) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
 
     await on_type(
@@ -391,12 +400,13 @@ async def test_no_formats_says_so(repo: Repository, sent: Sent, registry: Provid
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         FakeYtdlp(formats=[]),  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
     assert "No downloadable video formats" in sent.edits[-1][0]
 
 
 async def test_choosing_a_quality_enqueues_a_video_job(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
     await repo.set_request_formats(
@@ -409,6 +419,7 @@ async def test_choosing_a_quality_enqueues_a_video_job(
         QualityCb(req_id=request.req_id, format_id="137"),
         repo,
         worker,  # pyright: ignore[reportArgumentType]
+        settings,
     )
 
     jobs = await repo.queued_jobs_for_user(USER)
@@ -419,7 +430,7 @@ async def test_choosing_a_quality_enqueues_a_video_job(
 
 
 async def test_an_unknown_format_id_is_treated_as_expired(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
 
@@ -428,6 +439,7 @@ async def test_an_unknown_format_id_is_treated_as_expired(
         QualityCb(req_id=request.req_id, format_id="nope"),
         repo,
         FakeWorker(),  # pyright: ignore[reportArgumentType]
+        settings,
     )
 
     assert sent.toasts == ["Request expired, send the link again."]
@@ -435,7 +447,7 @@ async def test_an_unknown_format_id_is_treated_as_expired(
 
 
 async def test_back_returns_to_the_type_keyboard(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
 
@@ -445,7 +457,7 @@ async def test_back_returns_to_the_type_keyboard(
 
 
 async def test_a_stale_callback_after_a_restart_is_answered_and_disarmed(
-    repo: Repository, sent: Sent, registry: ProviderRegistry
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await on_type(
         a_callback(),
@@ -454,6 +466,7 @@ async def test_a_stale_callback_after_a_restart_is_answered_and_disarmed(
         FakeWorker(),  # pyright: ignore[reportArgumentType]
         FakeYtdlp(),  # pyright: ignore[reportArgumentType]
         registry,
+        settings,
     )
 
     assert sent.toasts == ["Request expired, send the link again."]
@@ -474,3 +487,119 @@ def test_callback_data_round_trips() -> None:
     unpacked = TypeCb.unpack(packed)
     assert unpacked.req_id == "abc123"
     assert unpacked.kind is ExtractType.VIDEO
+
+
+# --- destination step ---------------------------------------------------------
+
+
+@pytest.fixture
+def with_server(settings: Settings) -> Settings:
+    settings.fileserver_url = "https://files.invalid:8443"
+    settings.fileserver_token = SecretStr("a-token-long-enough-for-the-check-here")
+    return settings
+
+
+async def test_the_destination_step_is_skipped_without_a_server(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
+) -> None:
+    # One possible answer is not a question worth asking.
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
+
+    await on_type(
+        a_callback(),
+        TypeCb(req_id=request.req_id, kind=ExtractType.AUDIO),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        FakeYtdlp(),  # pyright: ignore[reportArgumentType]
+        registry,
+        settings,
+    )
+
+    assert await repo.queue_length() == 1
+    assert "Queued" in sent.edits[-1][0]
+
+
+async def test_audio_asks_where_it_should_go(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, with_server: Settings
+) -> None:
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
+
+    await on_type(
+        a_callback(),
+        TypeCb(req_id=request.req_id, kind=ExtractType.AUDIO),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        FakeYtdlp(),  # pyright: ignore[reportArgumentType]
+        registry,
+        with_server,
+    )
+
+    assert "Where should it go" in sent.edits[-1][0]
+    assert buttons(sent.edits[-1][1]) == ["Telegram", "Direct link"]
+    assert await repo.queue_length() == 0
+
+
+async def test_picking_a_destination_enqueues_with_it(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, with_server: Settings
+) -> None:
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
+    await repo.set_request_type(request.req_id, ExtractType.AUDIO)
+    worker = FakeWorker()
+
+    await on_destination(
+        a_callback(),
+        DestCb(req_id=request.req_id, where=Destination.SERVER),
+        repo,
+        worker,  # pyright: ignore[reportArgumentType]
+    )
+
+    jobs = await repo.queued_jobs_for_user(USER)
+    assert len(jobs) == 1
+    assert jobs[0].destination is Destination.SERVER
+    assert worker.wakes == 1
+
+
+async def test_the_chosen_quality_survives_the_destination_step(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, with_server: Settings
+) -> None:
+    # Quality is picked first, so it has to outlive the keyboard that asked.
+    request = await repo.create_request(youtube_ref(VIDEO_ID), user_id=USER, chat_id=CHAT)
+    await repo.set_request_type(request.req_id, ExtractType.VIDEO)
+    await repo.set_request_formats(
+        request.req_id, Request.encode_formats(select_video_formats({"formats": FORMATS}))
+    )
+
+    await on_quality(
+        a_callback(),
+        QualityCb(req_id=request.req_id, format_id="137"),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        with_server,
+    )
+    assert "Where should it go" in sent.edits[-1][0]
+
+    await on_destination(
+        a_callback(),
+        DestCb(req_id=request.req_id, where=Destination.TELEGRAM),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+    )
+
+    jobs = await repo.queued_jobs_for_user(USER)
+    assert len(jobs) == 1
+    assert jobs[0].format_id == "137"
+    assert jobs[0].kind is ExtractType.VIDEO
+    assert jobs[0].destination is Destination.TELEGRAM
+
+
+async def test_a_destination_callback_for_an_unknown_request_expires(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, with_server: Settings
+) -> None:
+    await on_destination(
+        a_callback(),
+        DestCb(req_id="gone", where=Destination.SERVER),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+    )
+    assert sent.toasts == ["Request expired, send the link again."]
+    assert await repo.queue_length() == 0

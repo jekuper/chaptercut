@@ -27,6 +27,11 @@ log = get_logger(__name__)
 
 
 class TooLargeError(RuntimeError):
+    """The result is over the Telegram limit.
+
+    Carries the size so the caller can explain the reroute to the file server.
+    """
+
     def __init__(self, size: int, limit: int) -> None:
         self.size = size
         self.limit = limit

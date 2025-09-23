@@ -21,15 +21,15 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import anyio
+import structlog
 from anyio import to_thread
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 
-from filexchange.logging import get_logger
 from filexchange.settings import Settings
 from filexchange.storage import Storage, safe_name
 
-log = get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 FILENAME_HEADER = "X-Filename"
 

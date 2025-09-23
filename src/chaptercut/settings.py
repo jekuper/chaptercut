@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     audio_multi_delivery: MultiDelivery = "zip"
     cover_square: bool = True
 
+    # --- file server (optional) -------------------------------------------
+    # Empty disables the whole feature: no destination buttons, no fallback.
+    fileserver_url: str = ""
+    fileserver_token: SecretStr = SecretStr("")
+    # PEM to trust for the server's certificate: the self-signed cert itself,
+    # or the private CA that signed it. Empty means use the system trust store.
+    fileserver_ca: Path | None = None
+
     max_send_bytes: int = 1_900_000_000
     cache_max_bytes: int = 21_474_836_480
     worker_concurrency: int = 1
@@ -103,6 +111,14 @@ class Settings(BaseSettings):
             raise ValueError("audio bitrate must look like 192K")
         return value.upper()
 
+    @field_validator("fileserver_url")
+    @classmethod
+    def _check_fileserver_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if value and not value.startswith(("http://", "https://")):
+            raise ValueError("file server url must start with http:// or https://")
+        return value
+
     @model_validator(mode="after")
     def _check_consistency(self) -> Settings:
         unknown = set(self.admin_user_ids) - set(self.allowed_user_ids)
@@ -112,6 +128,8 @@ class Settings(BaseSettings):
             raise ValueError("worker concurrency must be at least 1")
         if self.bot_api_local and self.bot_api_url.startswith("https://api.telegram.org"):
             raise ValueError("bot_api_local must be false when using Telegram's cloud server")
+        if self.fileserver_url and not self.fileserver_token.get_secret_value():
+            raise ValueError("a file server url needs CC_FILESERVER_TOKEN as well")
         return self
 
     @cached_property
@@ -139,6 +157,10 @@ class Settings(BaseSettings):
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_user_ids
+
+    @property
+    def fileserver_enabled(self) -> bool:
+        return bool(self.fileserver_url)
 
     def active_cookies_file(self) -> Path | None:
         """The cookies file, but only if it actually exists and is readable."""

@@ -9,6 +9,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 
 from chaptercut.bot import texts
+from chaptercut.bot.fileserver import FileServerClient, FileServerError
 from chaptercut.cache.store import CachedResult, CacheKey, CacheStore
 from chaptercut.logging import get_logger
 from chaptercut.pipeline import ffmpeg
@@ -44,6 +45,7 @@ async def cmd_status(
     cache: CacheStore,
     ytdlp: YtdlpFactory,
     registry: ProviderRegistry,
+    fileserver: FileServerClient | None = None,
 ) -> None:
     current = worker.current_job
     running = None
@@ -62,8 +64,19 @@ async def cmd_status(
             ytdlp_version=await ytdlp.for_provider(registry.providers[0]).version(),
             ffmpeg_ok=await ffmpeg.available(),
             providers=registry.labels,
+            fileserver=await _fileserver_status(fileserver),
         )
     )
+
+
+async def _fileserver_status(fileserver: FileServerClient | None) -> str:
+    if fileserver is None:
+        return "not configured"
+    try:
+        stats = await fileserver.stats()
+    except FileServerError as exc:
+        return f"unreachable ({exc})"
+    return f"ok, {stats.files} file(s), {format_bytes(stats.bytes)}"
 
 
 @router.message(Command("cancel"))
@@ -105,6 +118,67 @@ async def cmd_cookies(
         age = utcnow().timestamp() - stat.st_mtime
         lines.append(f"{provider.label}: {format_bytes(stat.st_size)}, {format_uptime(age)} old")
     await message.answer("\n".join(lines) if lines else texts.COOKIES_MISSING)
+
+
+@router.message(Command("files"))
+async def cmd_files(
+    message: Message,
+    command: CommandObject,
+    fileserver: FileServerClient | None = None,
+    is_admin: bool = False,
+) -> None:
+    if not is_admin:
+        await message.answer(texts.ADMIN_ONLY)
+        return
+    if fileserver is None:
+        await message.answer(texts.SERVER_UNAVAILABLE)
+        return
+
+    args = (command.args or "").split()
+    try:
+        if not args:
+            await _files_list(message, fileserver)
+        elif args[0] == "purge":
+            await _files_purge(message, fileserver, args[1:])
+        else:
+            await message.answer(texts.FILES_USAGE_HELP, parse_mode="HTML")
+    except FileServerError as exc:
+        # A server that is down must not take the command down with it.
+        log.warning("files.command_failed", error=str(exc))
+        await message.answer(texts.FILES_ERROR.format(reason=texts.esc(str(exc))))
+
+
+async def _files_list(message: Message, fileserver: FileServerClient) -> None:
+    stats = await fileserver.stats()
+    header = texts.FILES_USAGE_LINE.format(
+        count=stats.files, size=format_bytes(stats.bytes), hours=stats.retention_hours
+    )
+    if not stats.files:
+        await message.answer(f"{header}\n{texts.FILES_EMPTY}")
+        return
+
+    entries = await fileserver.list_files()
+    lines = [texts.files_entry(item.filename, item.size, item.token) for item in entries[:20]]
+    if len(entries) > len(lines):
+        lines.append(f"... and {len(entries) - len(lines)} more")
+    body = "\n".join(lines)
+    await message.answer(f"{header}\n\n{body}", parse_mode="HTML")
+
+
+async def _files_purge(message: Message, fileserver: FileServerClient, args: list[str]) -> None:
+    if not args:
+        await message.answer(texts.FILES_USAGE_HELP, parse_mode="HTML")
+        return
+    if args[0] == "all":
+        count = await fileserver.purge_all()
+        log.info("files.flushed", count=count)
+        await message.answer(texts.FILES_PURGED_ALL.format(count=count))
+        return
+    if await fileserver.purge(args[0]):
+        log.info("files.purged", token=args[0])
+        await message.answer(texts.FILES_PURGED.format(token=texts.esc(args[0])))
+    else:
+        await message.answer(texts.FILES_NOT_FOUND.format(token=texts.esc(args[0])))
 
 
 @router.message(Command("cache"))

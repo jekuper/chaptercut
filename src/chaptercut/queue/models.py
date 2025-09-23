@@ -18,6 +18,11 @@ class ExtractType(StrEnum):
     VIDEO = "video"
 
 
+class Destination(StrEnum):
+    TELEGRAM = "telegram"
+    SERVER = "server"
+
+
 class JobState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -57,6 +62,8 @@ class Request:
     expires_at: datetime
     extract_type: ExtractType | None = None
     formats_json: str | None = None
+    destination: Destination = Destination.TELEGRAM
+    chosen_format_id: str | None = None
 
     @property
     def formats(self) -> list[FormatOption]:
@@ -78,6 +85,7 @@ class Request:
         if created is None or expires is None:  # pragma: no cover - NOT NULL columns
             raise ValueError("request row is missing timestamps")
         raw_type = row["extract_type"]
+        raw_destination = row["destination"]
         return cls(
             req_id=str(row["req_id"]),
             user_id=int(row["user_id"]),
@@ -87,6 +95,8 @@ class Request:
             video_id=str(row["video_id"]),
             extract_type=ExtractType(raw_type) if raw_type else None,
             formats_json=row["formats_json"],
+            destination=Destination(raw_destination) if raw_destination else Destination.TELEGRAM,
+            chosen_format_id=row["format_id"],
             created_at=created,
             expires_at=expires,
         )
@@ -104,6 +114,7 @@ class Job:
     url: str
     state: JobState
     created_at: datetime
+    destination: Destination = Destination.TELEGRAM
     status_msg_id: int | None = None
     format_id: str | None = None
     phase: Phase | None = None
@@ -128,6 +139,9 @@ class Job:
             url=str(row["url"]),
             format_id=row["format_id"],
             state=JobState(row["state"]),
+            destination=Destination(row["destination"])
+            if row["destination"]
+            else Destination.TELEGRAM,
             phase=Phase(row["phase"]) if row["phase"] else None,
             error=row["error"],
             created_at=created,
