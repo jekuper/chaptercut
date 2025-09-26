@@ -58,6 +58,40 @@ just logs
 
 Send `/start` to the bot from an allowlisted account.
 
+## Running it day to day
+
+From the repository root on the bot machine.
+
+| what you want | command |
+|---|---|
+| Restart the bot | `docker compose restart bot` |
+| Apply a change to `.env` | `docker compose up -d bot` |
+| Rebuild after a code change | `docker compose up -d --build bot` |
+| Pull and rebuild everything | `git pull && docker compose up -d --build` |
+| Refresh yt-dlp only | `docker compose build --build-arg YTDLP_REFRESH=$(date +%s) bot && docker compose up -d bot` |
+| Follow the logs | `docker compose logs -f bot` |
+| Shell inside the container | `docker compose exec bot bash` |
+| Stop everything | `docker compose down` |
+
+Three of these are worth knowing the difference between, because picking the
+wrong one looks like "my change did nothing":
+
+- **`restart`** stops and starts the same container. It does not re-read
+  `.env` and does not pick up code. Use it to clear a wedged state, or after
+  dropping a new `cookies.txt` into `data/`.
+- **`up -d`** recreates the container from the existing image, which does
+  re-read `.env`. This is the one for a configuration change.
+- **`up -d --build`** rebuilds the image first. This is the one for a code
+  change, and the one to use after `git pull`.
+
+When YouTube starts failing with extractor errors, it is usually yt-dlp that
+is stale rather than anything here. The refresh command above rebuilds only
+that layer, which takes seconds; a plain rebuild would reuse the cached one.
+
+The file server is not part of this compose project. It runs under systemd on
+its own machine: `systemctl restart filexchange`. See
+[fileserver/README.md](fileserver/README.md).
+
 ## Why a self-hosted Bot API server
 
 Telegram's cloud Bot API caps bot uploads at 50 MB. A chapter-split album is

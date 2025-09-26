@@ -21,8 +21,13 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
-# yt-dlp goes stale fast; always take the newest at build time.
-RUN uv pip install --upgrade yt-dlp
+# yt-dlp goes stale fast, and this layer caches like any other: rebuilding
+# without a code change would otherwise reuse the same old version, which is
+# precisely when YouTube has broken and a newer one is needed. Pass a changing
+# value to invalidate just this layer:
+#   docker compose build --build-arg YTDLP_REFRESH=$(date +%s) bot
+ARG YTDLP_REFRESH=0
+RUN echo "yt-dlp refresh marker: ${YTDLP_REFRESH}"  && uv pip install --upgrade yt-dlp
 
 RUN useradd --create-home --uid 10001 app \
  && mkdir -p /data \
