@@ -124,7 +124,20 @@ CC_FILESERVER_TOKEN=<the same token>
 CC_FILESERVER_CA=/data/fileserver.crt
 ```
 
-Put the trust anchor from step 3 at that path. With all three set, jobs gain a
+These are paths **inside the bot's container**, not host paths. A host path
+like `/home/you/server.crt` does not exist in there, and the bot will report it
+as missing even though you can `cat` it from your shell.
+
+So copy the trust anchor from step 3 into the bot's `data/` directory, which is
+owned by uid 10001 and therefore needs sudo:
+
+```bash
+cd ~/chaptercut
+sudo cp ~/server.crt data/fileserver.crt
+sudo chown 10001:10001 data/fileserver.crt
+sudo chmod 644 data/fileserver.crt
+docker compose up -d bot     # up, not restart: .env changed
+``` With all three set, jobs gain a
 `Telegram` / `Direct link` choice, and anything too big for Telegram
 automatically reroutes here. Leave `CC_FILESERVER_URL` empty and the whole
 feature disappears, including the extra button.

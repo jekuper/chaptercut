@@ -69,12 +69,25 @@ The fix is operational, not a code change.
 
 1. Log into YouTube in a browser with a **throwaway** Google account.
 2. Export cookies in Netscape format with a browser extension.
-3. Copy it into the data directory on the host: `cp cookies.txt data/`, then
-   `sudo chown 10001:10001 data/cookies.txt`. That is the path
-   `CC_COOKIES_FILE` points at inside the container.
+3. Copy it into the data directory on the host. `data/` is owned by uid 10001
+   so the container can write there, which means dropping a file in needs
+   sudo:
+
+   ```bash
+   sudo cp cookies.txt data/cookies.txt
+   sudo chown 10001:10001 data/cookies.txt
+   sudo chmod 600 data/cookies.txt
+   ```
+
+   That is the path `CC_COOKIES_FILE` points at inside the container.
 
 A per-site jar works the same way: `data/cookies-tiktok.txt` takes precedence
 over the shared one for TikTok.
+
+Anything else the bot reads from the host goes in the same place for the same
+reason. Paths in `.env` are always **container** paths (`/data/...`), never
+host paths: `/home/you/thing.crt` does not exist inside the container, and the
+bot will correctly report it as missing.
 
 The bot reads the file, never writes it, never logs it, and never sends it
 anywhere but to yt-dlp on the local disk. `/cookies` reports only its size and
