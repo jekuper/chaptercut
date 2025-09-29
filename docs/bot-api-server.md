@@ -5,11 +5,6 @@
 Telegram's cloud Bot API caps bot uploads at 50 MB. A chapter-split album is
 routinely larger than that.
 
-The predecessor project answered this by building a separate FastAPI upload
-server with shared-key auth, random links, and a cleanup task, plus dual upload
-code paths and a "where should I put this" choice in the UX. That is a lot of
-machinery, and a standing credential, for a limit that is configurable.
-
 `telegram-bot-api` is Telegram's own Bot API implementation, open source and
 self-hostable. Run with `--local` it:
 
@@ -89,11 +84,10 @@ reason. Paths in `.env` are always **container** paths (`/data/...`), never
 host paths: `/home/you/thing.crt` does not exist inside the container, and the
 bot will correctly report it as missing.
 
-The bot reads the file, never writes it, never logs it, and never sends it
-anywhere but to yt-dlp on the local disk. `/cookies` reports only its size and
-age. Treat the file exactly as you would a password: it carries a live Google
-session. It is in `.gitignore` and in the gitleaks rules; the predecessor
-committed one and it stayed in the history forever.
+The bot reads the file, never writes it, and never sends it anywhere but to
+yt-dlp on the local disk. `/cookies` reports only its size and age. Treat it as
+a live Google session, because that is what it is: it is covered by
+`.gitignore` and by a dedicated gitleaks rule.
 
 When yt-dlp fails with a bot check, the bot recognises it and replies with a
 distinct message rather than a generic failure, so it is obvious that the
@@ -109,9 +103,6 @@ through `CC_YTDLP_EXTRA_ARGS`, for example:
 ```
 CC_YTDLP_EXTRA_ARGS=--extractor-args "youtube:player_client=default,mweb"
 ```
-
-Do not build a custom token-upload API. The predecessor did, and it was both
-unnecessary and a place for credentials to leak.
 
 ## Operations
 

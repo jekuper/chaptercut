@@ -42,8 +42,8 @@ def test_commit_leaves_no_staging_directory(cache: CacheStore, tmp_path: Path) -
 
 
 def test_directory_without_a_manifest_is_not_cached(cache: CacheStore) -> None:
-    # Exactly the predecessor's failure: a directory created early, manifest
-    # never written, and every later request believing it was cached.
+    # A directory created early with the manifest never written: every later
+    # request would otherwise believe the video was cached.
     poisoned = cache.path_for(KEY)
     poisoned.mkdir(parents=True)
     (poisoned / "cover.jpg").write_bytes(b"jpeg")

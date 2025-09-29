@@ -29,7 +29,8 @@ def test_safe_filename(raw: str, expected: str) -> None:
 
 
 def test_safe_filename_does_not_underscore_everything() -> None:
-    # The predecessor produced "Some_Song_Name_"; spaces are readable and legal.
+    # Spaces are readable and legal in a filename; underscores are neither
+    # required nor nicer.
     assert "_" not in safe_filename("Some Song Name!")
 
 

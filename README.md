@@ -156,23 +156,20 @@ Every setting is an environment variable with the `CC_` prefix; see
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md),
-[docs/providers.md](docs/providers.md), and
-[docs/lessons-learned.md](docs/lessons-learned.md) for the predecessor's
-mistakes this rewrite exists to avoid.
+See [docs/architecture.md](docs/architecture.md) for how the pieces fit
+together, and [docs/providers.md](docs/providers.md) for adding a site.
 
 ## Security notes
 
-- No secret is ever in the repo. Configuration comes from the environment via
-  `pydantic-settings`; only `.env.example` is committed.
-- `.env`, `data/`, `cookies.txt`, `*.db` are gitignored from the first commit.
-- A `gitleaks` pre-commit hook and a CI job scan for Telegram tokens and
-  cookie jars specifically. Enable GitHub push protection on the remote too.
 - The allowlist is the entire auth model. Anyone not in `CC_ALLOWED_USER_IDS`
-  gets one terse reply and nothing else is processed.
-- Cookies are treated as a password: mounted read-only, never logged, never
-  echoed back, never transmitted anywhere but to yt-dlp on disk.
-- Logs carry video ids, never full URLs with query strings, and never tokens.
+  gets one terse reply, and nothing else about the update is processed.
+- A `gitleaks` pre-commit hook and CI job carry extra rules for Telegram
+  tokens and Netscape cookie jars, which the default rule set does not cover.
+- `/cookies` reports a jar's size and age only, never its contents.
+- Logs carry video ids rather than full URLs, so query strings stay out of
+  them.
+- The bot verifies the file server's certificate against a pinned PEM, and
+  there is no option to disable that.
 
 ## License
 

@@ -1,8 +1,8 @@
 """The background worker: claim a job, run the pipeline, deliver, clean up.
 
 Jobs are claimed from SQLite, so a restart mid-job loses nothing: the startup
-re-queue puts it back. The scratch directory is removed in a `finally`, on
-every path, which is what the predecessor's success-only cleanup did not do.
+re-queue puts it back. The scratch directory is removed in a `finally`, so it
+goes on every path, not just the successful one.
 """
 
 from __future__ import annotations

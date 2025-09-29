@@ -165,8 +165,8 @@ async def test_the_work_directory_is_removed_on_success(
 async def test_the_work_directory_is_removed_on_failure(
     settings: Settings, repo: Repository, cache: CacheStore
 ) -> None:
-    # The predecessor deleted scratch files only on the success path, so any
-    # ordinary failure leaked hundreds of megabytes.
+    # Cleanup has to run on the failure path too, or every ordinary failure
+    # leaks the whole working directory.
     await enqueue(repo)
     pipeline = FakePipeline(error=YtdlpError("video unavailable"))
     worker, _bot = build_worker(settings, repo, cache, pipeline)

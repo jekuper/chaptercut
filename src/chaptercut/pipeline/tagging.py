@@ -4,9 +4,9 @@
 
 """ID3v2.4 tagging.
 
-Provenance goes in the frames built for it. The predecessor wrote the source
-URL and download date into the album field, so every player displayed a URL
-where the album name belongs; TALB here is the video title and nothing else.
+Provenance goes in the frames built for it: COMM for humans, TXXX for machines.
+TALB is the video title and nothing else, so players show an album name where
+an album name belongs.
 """
 
 from __future__ import annotations

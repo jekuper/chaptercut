@@ -31,8 +31,8 @@ HEARTBEAT_SECONDS = 30.0
 def sweep_startup(settings: Settings, cache: CacheStore) -> None:
     """Remove everything a previous run may have left half-finished.
 
-    Without this the predecessor accumulated hundreds of megabytes of orphaned
-    scratch files and, worse, cache directories that looked valid but were not.
+    Without this, orphaned scratch files accumulate indefinitely, and a cache
+    directory left half-written would keep being treated as a valid hit.
     """
     removed_work = 0
     if settings.work_dir.is_dir():

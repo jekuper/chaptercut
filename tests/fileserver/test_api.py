@@ -21,7 +21,7 @@ def test_upload_requires_a_token(client: TestClient) -> None:
         "",
         "Bearer",
         "Bearer wrong",
-        TOKEN,  # the draft compared the raw header, so a bare token used to pass
+        TOKEN,  # the bare token, without the scheme
         f"Basic {TOKEN}",
         f"Bearer {TOKEN}extra",
         f"Bearer {TOKEN[:-1]}",
@@ -167,7 +167,6 @@ def test_a_traversing_filename_is_flattened(
     ],
 )
 def test_a_traversing_download_is_a_404(client: TestClient, path: str) -> None:
-    # The draft joined these straight onto the uploads dir.
     assert client.get(path).status_code == 404
 
 

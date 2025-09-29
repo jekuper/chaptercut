@@ -1,8 +1,8 @@
 """Link intake: a recognised link in, a choice keyboard out.
 
-Ids come from the provider regexes. The predecessor made a full yt-dlp network
-round-trip just to read the id out of the result, which cost seconds per link
-for something a pattern match already answers.
+Ids come from the provider regexes rather than a yt-dlp lookup: a pattern
+match answers instantly, where a network round-trip would cost seconds per
+link before the user has even chosen anything.
 """
 
 from __future__ import annotations

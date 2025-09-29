@@ -22,8 +22,7 @@ class Provider(ABC):
 ```
 
 `match` is pure pattern matching and does no I/O. That is what lets intake
-answer instantly instead of shelling out to yt-dlp just to learn an id, which
-is what the predecessor did.
+answer instantly instead of shelling out to yt-dlp just to learn an id.
 
 A `MediaRef` is what it produces:
 

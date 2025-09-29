@@ -1,9 +1,9 @@
 """On-disk cache of processed audio, keyed by provider and media id.
 
-The invariant that the predecessor broke: a directory counts as cached only if
-it holds a valid manifest, and it only ever appears under its final name via an
-atomic rename. A crash mid-write leaves a `.tmp` directory, which the startup
-sweep removes.
+The invariant: a directory counts as cached only if it holds a valid manifest,
+and it only ever appears under its final name via an atomic rename. A crash
+mid-write therefore leaves a `.tmp` directory, which the startup sweep removes,
+rather than something that looks complete but is not.
 
 Keys are namespaced by provider because ids are only unique within a site: an
 11-character YouTube id and a 19-digit TikTok id will not collide today, but

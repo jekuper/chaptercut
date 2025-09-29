@@ -1,7 +1,7 @@
 """Intake and choice handlers, called directly with aiogram objects.
 
-The point is the request/job bookkeeping and that several links can be in
-flight at once, which the predecessor's FSM could not do.
+The point is the request/job bookkeeping, and that several links can be in
+flight at once without their dialogues interfering.
 """
 
 from __future__ import annotations
@@ -245,7 +245,6 @@ async def test_a_mixed_message_takes_the_first_link_whichever_site(
 async def test_two_links_in_flight_get_distinct_requests(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    # The predecessor's FSM state collided here and corrupted both dialogues.
     await handle_text(a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry)
     await handle_text(a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"), repo, registry)
 

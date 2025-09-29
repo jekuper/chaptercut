@@ -80,7 +80,7 @@ def test_every_text_frame_is_written(mp3_file: Path, track: Track, meta: TrackMe
 
 
 def test_album_is_the_video_title_not_a_url(mp3_file: Path, track: Track, meta: TrackMeta) -> None:
-    # The predecessor wrote "<url> (<date>)" here, so players showed a URL.
+    # Provenance belongs in COMM and TXXX, never in the album field.
     album = str(tag_all(mp3_file, track, meta)["TALB"].text[0])
     assert album == "Test Album"
     assert "http" not in album

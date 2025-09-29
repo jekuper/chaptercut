@@ -50,8 +50,8 @@ def _authorize(settings: Settings, authorization: str | None) -> None:
 async def _sweeper(storage: Storage, interval: float) -> None:
     """Delete expired entries forever.
 
-    Every iteration is guarded: one bad entry must not silently end retention,
-    which is how the draft's cleanup task would have failed.
+    Every iteration is guarded, because an unhandled exception here would end
+    the task and silently stop retention altogether.
     """
     while True:
         try:
