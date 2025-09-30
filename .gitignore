@@ -34,5 +34,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# local agent instructions
+# local working documents
 CLAUDE.local.md
+CHAPTERCUT_SPEC.md
