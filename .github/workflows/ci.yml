@@ -2,8 +2,11 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
+  # Adds a "Run workflow" button on the Actions tab, so a run can be started
+  # without pushing anything.
+  workflow_dispatch:
 
 jobs:
   check:
@@ -15,6 +18,12 @@ jobs:
         with:
           enable-cache: true
 
+      # The pipeline shells out to ffmpeg and ffprobe. Without them the
+      # integration tests skip themselves and the suite passes without ever
+      # having cut a file.
+      - name: install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - run: uv sync --frozen
 
       - name: ruff
@@ -25,8 +34,17 @@ jobs:
       - name: pyright
         run: uv run pyright
 
+      # If these are missing the integration tests skip themselves and the
+      # suite still goes green, so fail here instead of passing quietly.
+      - name: verify ffmpeg is usable
+        run: |
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      # -ra lists the reason for any skip, so a silently disabled test is
+      # visible in the log rather than hidden in the pass count.
       - name: pytest
-        run: uv run pytest -q --cov --cov-report=term-missing
+        run: uv run pytest -q -ra --cov --cov-report=term-missing
 
   secrets:
     runs-on: ubuntu-latest
