@@ -528,3 +528,36 @@ async def test_a_cache_hit_still_gets_a_thumbnail(
     assert isinstance(second, AudioResult)
     assert second.from_cache is True
     assert second.thumbnail is not None and second.thumbnail.is_file()
+
+
+# --- SoundCloud --------------------------------------------------------------
+
+SOUNDCLOUD_ID = "123456789"
+
+
+async def test_a_soundcloud_permalink_resolves_to_the_numeric_id(
+    settings: Settings, cache: CacheStore, tone_mp3: Path, data_dir: Path
+) -> None:
+    # The URL names a slug, so the cache key comes from the metadata fetch.
+    pipeline, ytdlp = build(settings, cache, tone_mp3, video_id=SOUNDCLOUD_ID, chapters=CHAPTERS)
+    job = Job(
+        job_id="job1",
+        req_id="req1",
+        user_id=111,
+        chat_id=999,
+        kind=ExtractType.AUDIO,
+        provider="soundcloud",
+        video_id="someuser/some-track",
+        url="https://soundcloud.com/someuser/some-track",
+        state=JobState.RUNNING,
+        created_at=utcnow(),
+    )
+
+    result = await pipeline.run(job, data_dir / "work" / "job1", RecordingSink())
+
+    assert isinstance(result, AudioResult)
+    assert result.track_count == 1
+    assert result.key == CacheKey("soundcloud", SOUNDCLOUD_ID)
+    assert ytdlp.last_url == "https://soundcloud.com/someuser/some-track"
+    assert cache.get(CacheKey("soundcloud", SOUNDCLOUD_ID)) is not None
+    assert cache.get(CacheKey("soundcloud", "someuser/some-track")) is None

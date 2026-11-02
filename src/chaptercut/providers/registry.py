@@ -9,12 +9,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from chaptercut.providers.base import URL_CANDIDATE_RE, MediaRef, Provider
+from chaptercut.providers.soundcloud import SoundCloudProvider
 from chaptercut.providers.tiktok import TikTokProvider
 from chaptercut.providers.youtube import YouTubeProvider
 
 # Order matters only for tie-breaking a URL two providers both claim, which
 # should not happen; it is also the order shown in the help text.
-ALL_PROVIDERS: tuple[Provider, ...] = (YouTubeProvider(), TikTokProvider())
+ALL_PROVIDERS: tuple[Provider, ...] = (YouTubeProvider(), TikTokProvider(), SoundCloudProvider())
 
 
 class UnknownProviderError(KeyError):

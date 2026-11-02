@@ -1,8 +1,8 @@
 # chaptercut
 
-A private Telegram bot that turns a YouTube or TikTok link into properly
-tagged MP3s, split along the video's chapter markers, or into a downloaded
-video file.
+A private Telegram bot that turns a YouTube, TikTok or SoundCloud link into
+properly tagged MP3s, split along the video's chapter markers, or into a
+downloaded video file.
 
 Paste a link, pick `Audio` or `Video`, get the result back in the chat.
 
@@ -17,8 +17,9 @@ bot   [ Some Album.zip ]  12 tracks, 68.4 MB
 
 ## What it does
 
-- Takes **YouTube** and **TikTok** links, for both audio and video. Adding
-  another site is one file: see [docs/providers.md](docs/providers.md).
+- Takes **YouTube** and **TikTok** links, for both audio and video, and
+  **SoundCloud** links for audio. Adding another site is one file: see
+  [docs/providers.md](docs/providers.md).
 - Splits an album upload into one MP3 per chapter, stream-copied (no re-encode,
   no generation loss).
 - Writes full ID3v2.4 tags: title, artist, album, album artist, track number,
@@ -143,7 +144,7 @@ Every setting is an environment variable with the `CC_` prefix; see
 | `CC_ADMIN_USER_IDS` | required | Subset allowed to use `/cache` and `/cookies` |
 | `CC_DATA_DIR` | `/data` | Runtime volume |
 | `CC_COOKIES_FILE` | `/data/cookies.txt` | Optional yt-dlp cookie jar; `cookies-<site>.txt` overrides per site |
-| `CC_ENABLED_PROVIDERS` | empty (all) | Limit to certain sites, e.g. `youtube` |
+| `CC_ENABLED_PROVIDERS` | empty (all) | Limit to certain sites, e.g. `youtube,soundcloud` |
 | `CC_YTDLP_EXTRA_ARGS` | empty | Extra yt-dlp CLI args |
 | `CC_AUDIO_BITRATE` | empty (VBR best) | e.g. `192K` |
 | `CC_AUDIO_MULTI_DELIVERY` | `zip` | `zip`, `individual`, or `both` |

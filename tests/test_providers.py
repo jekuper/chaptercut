@@ -14,6 +14,7 @@ from chaptercut.providers.registry import (
     ProviderRegistry,
     UnknownProviderError,
 )
+from chaptercut.providers.soundcloud import SoundCloudProvider
 from chaptercut.providers.tiktok import TikTokProvider
 from chaptercut.providers.youtube import YouTubeProvider
 
@@ -29,6 +30,11 @@ def youtube() -> YouTubeProvider:
 @pytest.fixture
 def tiktok() -> TikTokProvider:
     return TikTokProvider()
+
+
+@pytest.fixture
+def soundcloud() -> SoundCloudProvider:
+    return SoundCloudProvider()
 
 
 # --- YouTube -----------------------------------------------------------------
@@ -204,6 +210,97 @@ def test_tiktok_strips_the_trailing_hashtag_pile(
     assert tiktok.clean_title(raw) == expected
 
 
+# --- SoundCloud --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://soundcloud.com/someuser/some-track",
+        "http://soundcloud.com/someuser/some-track/",
+        "soundcloud.com/someuser/some-track",
+        "https://www.soundcloud.com/someuser/some-track",
+        "https://m.soundcloud.com/someuser/some-track",
+        "https://soundcloud.com/someuser/some-track?in=someuser/sets/a-mix",
+        "https://soundcloud.com/someuser/some-track?utm_source=clipboard&si=abc",
+        "https://soundcloud.com/someuser/some-track#t=1:00",
+        "listen https://soundcloud.com/someuser/some-track now",
+    ],
+)
+def test_soundcloud_permalinks(soundcloud: SoundCloudProvider, text: str) -> None:
+    # The permalink names a user and a slug, never the numeric id, so the
+    # reference is unresolved until the metadata fetch reports the id.
+    ref = soundcloud.match(text)
+    assert ref is not None
+    assert ref.provider == "soundcloud"
+    assert ref.media_id == "someuser/some-track"
+    assert ref.resolved is False
+    assert ref.url == "https://soundcloud.com/someuser/some-track"
+
+
+def test_soundcloud_keeps_the_secret_token_of_a_private_track(
+    soundcloud: SoundCloudProvider,
+) -> None:
+    ref = soundcloud.match("https://soundcloud.com/someuser/some-track/s-AbC123xyz?x=1")
+    assert ref is not None
+    assert ref.media_id == "someuser/some-track"
+    assert ref.url == "https://soundcloud.com/someuser/some-track/s-AbC123xyz"
+
+
+def test_soundcloud_api_urls_carry_the_id(soundcloud: SoundCloudProvider) -> None:
+    ref = soundcloud.match("https://api.soundcloud.com/tracks/123456789")
+    assert ref is not None
+    assert ref.media_id == "123456789"
+    assert ref.resolved is True
+    assert ref.url == "https://api.soundcloud.com/tracks/123456789"
+
+
+def test_soundcloud_short_links_defer_the_id(soundcloud: SoundCloudProvider) -> None:
+    ref = soundcloud.match("https://on.soundcloud.com/AbCdEf123/")
+    assert ref is not None
+    assert ref.media_id == "AbCdEf123"
+    assert ref.resolved is False
+    assert ref.url == "https://on.soundcloud.com/AbCdEf123"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "hello",
+        "https://soundcloud.com/",
+        "https://soundcloud.com/someuser",
+        "https://soundcloud.com/someuser/",
+        "https://soundcloud.com/someuser/sets/a-playlist",
+        "https://soundcloud.com/someuser/tracks",
+        "https://soundcloud.com/someuser/likes",
+        "https://soundcloud.com/discover/sets/charts-top:all-music",
+        "https://soundcloud.com/search?q=something",
+        "https://soundcloud.com/you/library",
+        "https://notsoundcloud.com/someuser/some-track",
+        "https://soundcloud.com.evil.example/someuser/some-track",
+    ],
+)
+def test_soundcloud_rejects(soundcloud: SoundCloudProvider, text: str) -> None:
+    assert soundcloud.match(text) is None
+
+
+def test_soundcloud_is_audio_only_without_chapters(soundcloud: SoundCloudProvider) -> None:
+    assert soundcloud.supports_video is False
+    assert soundcloud.supports_chapters is False
+
+
+def test_soundcloud_canonical_ids(soundcloud: SoundCloudProvider) -> None:
+    assert soundcloud.is_canonical_id("123456789")
+    assert not soundcloud.is_canonical_id("someuser/some-track")
+    assert not soundcloud.is_canonical_id("AbCdEf123")
+
+
+def test_other_providers_offer_video() -> None:
+    assert YouTubeProvider().supports_video is True
+    assert TikTokProvider().supports_video is True
+
+
 # --- registry ----------------------------------------------------------------
 
 
@@ -268,7 +365,7 @@ def test_get_and_find() -> None:
 
 
 def test_labels_are_human_readable() -> None:
-    assert ProviderRegistry().labels == ["YouTube", "TikTok"]
+    assert ProviderRegistry().labels == ["YouTube", "TikTok", "SoundCloud"]
 
 
 def test_every_registered_provider_has_a_usable_name_and_label() -> None:

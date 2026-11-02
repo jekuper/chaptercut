@@ -57,6 +57,10 @@ class Provider(ABC):
     # its audio is always a single track.
     supports_chapters: bool = False
 
+    # Whether there is a video to offer. SoundCloud has none, so intake skips
+    # the Audio/Video question and goes straight to audio.
+    supports_video: bool = True
+
     # Whether processed audio for this site is worth keeping on disk.
     cache_audio: bool = True
 

@@ -20,6 +20,7 @@ from chaptercut.bot.routers.intake import handle_text
 from chaptercut.pipeline.formats import select_video_formats
 from chaptercut.pipeline.ytdlp import VideoInfo, YtdlpError
 from chaptercut.providers.registry import ProviderRegistry
+from chaptercut.providers.soundcloud import SoundCloudProvider
 from chaptercut.providers.tiktok import TikTokProvider
 from chaptercut.queue.models import Destination, ExtractType, Request
 from chaptercut.queue.repository import Repository
@@ -157,7 +158,9 @@ def first_req_id(markup: InlineKeyboardMarkup | None) -> str:
 async def test_a_youtube_link_creates_a_request_and_offers_the_type_keyboard(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    await handle_text(a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry)
+    await handle_text(
+        a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry, FakeWorker(), settings
+    )  # pyright: ignore[reportArgumentType]
 
     text, markup = sent.answers[0]
     assert "What do you want" in text
@@ -168,7 +171,11 @@ async def test_a_tiktok_link_creates_a_tiktok_request(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
-        a_message(f"https://www.tiktok.com/@someone/video/{TIKTOK_ID}"), repo, registry
+        a_message(f"https://www.tiktok.com/@someone/video/{TIKTOK_ID}"),
+        repo,
+        registry,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        settings,
     )
 
     assert buttons(sent.answers[0][1]) == ["Audio", "Video"]
@@ -181,7 +188,9 @@ async def test_a_tiktok_link_creates_a_tiktok_request(
 async def test_a_tiktok_short_link_stores_the_code_for_later_resolution(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    await handle_text(a_message("https://vm.tiktok.com/ZMhqAbCdE/"), repo, registry)
+    await handle_text(
+        a_message("https://vm.tiktok.com/ZMhqAbCdE/"), repo, registry, FakeWorker(), settings
+    )  # pyright: ignore[reportArgumentType]
 
     request = await repo.get_request(first_req_id(sent.answers[0][1]))
     assert request is not None
@@ -197,6 +206,8 @@ async def test_tracking_parameters_never_reach_the_stored_url(
         a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}?is_from_webapp=1&sender_device=pc"),
         repo,
         registry,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        settings,
     )
     request = await repo.get_request(first_req_id(sent.answers[0][1]))
     assert request is not None
@@ -206,7 +217,7 @@ async def test_tracking_parameters_never_reach_the_stored_url(
 async def test_non_link_text_lists_the_sites_it_accepts(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    await handle_text(a_message("what is this"), repo, registry)
+    await handle_text(a_message("what is this"), repo, registry, FakeWorker(), settings)  # pyright: ignore[reportArgumentType]
     assert "not a link I recognise" in sent.answers[0][0]
     assert "YouTube" in sent.answers[0][0]
     assert "TikTok" in sent.answers[0][0]
@@ -215,7 +226,7 @@ async def test_non_link_text_lists_the_sites_it_accepts(
 async def test_commands_are_left_to_the_command_router(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    await handle_text(a_message("/status"), repo, registry)
+    await handle_text(a_message("/status"), repo, registry, FakeWorker(), settings)  # pyright: ignore[reportArgumentType]
     assert sent.answers == []
 
 
@@ -223,7 +234,11 @@ async def test_several_links_processes_the_first_and_says_so(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
     await handle_text(
-        a_message(f"https://youtu.be/{VIDEO_ID} https://youtu.be/bbbbbbbbbbb"), repo, registry
+        a_message(f"https://youtu.be/{VIDEO_ID} https://youtu.be/bbbbbbbbbbb"),
+        repo,
+        registry,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        settings,
     )
     assert "several links" in sent.answers[0][0]
     assert len(sent.answers) == 2
@@ -236,6 +251,8 @@ async def test_a_mixed_message_takes_the_first_link_whichever_site(
         a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID} then https://youtu.be/{VIDEO_ID}"),
         repo,
         registry,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        settings,
     )
     request = await repo.get_request(first_req_id(sent.answers[1][1]))
     assert request is not None
@@ -245,8 +262,16 @@ async def test_a_mixed_message_takes_the_first_link_whichever_site(
 async def test_two_links_in_flight_get_distinct_requests(
     repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
 ) -> None:
-    await handle_text(a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry)
-    await handle_text(a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"), repo, registry)
+    await handle_text(
+        a_message(f"https://youtu.be/{VIDEO_ID}"), repo, registry, FakeWorker(), settings
+    )  # pyright: ignore[reportArgumentType]
+    await handle_text(
+        a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"),
+        repo,
+        registry,
+        FakeWorker(),
+        settings,
+    )  # pyright: ignore[reportArgumentType]
 
     req_ids = {
         TypeCb.unpack(button.callback_data).req_id  # pyright: ignore[reportArgumentType]
@@ -258,9 +283,17 @@ async def test_two_links_in_flight_get_distinct_requests(
     assert len(req_ids) == 2
 
 
-async def test_a_disabled_provider_is_not_recognised(repo: Repository, sent: Sent) -> None:
+async def test_a_disabled_provider_is_not_recognised(
+    repo: Repository, sent: Sent, settings: Settings
+) -> None:
     youtube_only = ProviderRegistry.enabled(["youtube"])
-    await handle_text(a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"), repo, youtube_only)
+    await handle_text(
+        a_message(f"https://www.tiktok.com/@u/video/{TIKTOK_ID}"),
+        repo,
+        youtube_only,
+        FakeWorker(),
+        settings,
+    )  # pyright: ignore[reportArgumentType]
     assert "not a link I recognise" in sent.answers[0][0]
     assert "TikTok" not in sent.answers[0][0]
 
@@ -602,3 +635,88 @@ async def test_a_destination_callback_for_an_unknown_request_expires(
     )
     assert sent.toasts == ["Request expired, send the link again."]
     assert await repo.queue_length() == 0
+
+
+async def test_a_soundcloud_link_skips_the_type_question_and_queues_audio(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
+) -> None:
+    # There is no video to offer, so the only question would have one answer.
+    worker = FakeWorker()
+    await handle_text(
+        a_message("https://soundcloud.com/someuser/some-track?in=someuser/sets/mix"),
+        repo,
+        registry,
+        worker,  # pyright: ignore[reportArgumentType]
+        settings,
+    )
+
+    assert len(sent.answers) == 1
+    text, markup = sent.answers[0]
+    assert "Queued" in text
+    assert markup is None
+    assert worker.wakes == 1
+
+    jobs = await repo.queued_jobs_for_user(USER)
+    assert len(jobs) == 1
+    assert jobs[0].provider == "soundcloud"
+    assert jobs[0].kind is ExtractType.AUDIO
+    assert jobs[0].url == "https://soundcloud.com/someuser/some-track"
+    assert jobs[0].status_msg_id == 7
+
+
+async def test_a_soundcloud_link_still_asks_where_it_should_go(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, with_server: Settings
+) -> None:
+    await handle_text(
+        a_message("https://soundcloud.com/someuser/some-track"),
+        repo,
+        registry,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        with_server,
+    )
+
+    text, markup = sent.answers[0]
+    assert "Where should it go" in text
+    assert buttons(markup) == ["Telegram", "Direct link"]
+    assert await repo.queue_length() == 0
+
+    assert isinstance(markup, InlineKeyboardMarkup)
+    data = markup.inline_keyboard[0][0].callback_data
+    assert data is not None
+    req_id = DestCb.unpack(data).req_id
+    request = await repo.get_request(req_id)
+    assert request is not None
+    assert request.extract_type is ExtractType.AUDIO
+
+    await on_destination(
+        a_callback(),
+        DestCb(req_id=req_id, where=Destination.TELEGRAM),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+    )
+    jobs = await repo.queued_jobs_for_user(USER)
+    assert [job.kind for job in jobs] == [ExtractType.AUDIO]
+
+
+async def test_a_video_request_for_an_audio_only_site_is_treated_as_audio(
+    repo: Repository, sent: Sent, registry: ProviderRegistry, settings: Settings
+) -> None:
+    # Only a stale or forged button can get here; it must not list qualities.
+    ref = SoundCloudProvider().match("https://soundcloud.com/someuser/some-track")
+    assert ref is not None
+    request = await repo.create_request(ref, user_id=USER, chat_id=CHAT)
+    ytdlp = FakeYtdlp(formats=FORMATS)
+
+    await on_type(
+        a_callback(),
+        TypeCb(req_id=request.req_id, kind=ExtractType.VIDEO),
+        repo,
+        FakeWorker(),  # pyright: ignore[reportArgumentType]
+        ytdlp,  # pyright: ignore[reportArgumentType]
+        registry,
+        settings,
+    )
+
+    assert ytdlp.calls == 0
+    jobs = await repo.queued_jobs_for_user(USER)
+    assert [job.kind for job in jobs] == [ExtractType.AUDIO]

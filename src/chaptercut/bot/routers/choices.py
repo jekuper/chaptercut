@@ -53,10 +53,14 @@ async def on_type(
     request = await _resolve(callback, repo, callback_data.req_id)
     if request is None:
         return
-    await repo.set_request_type(request.req_id, callback_data.kind)
+    kind = callback_data.kind
+    # Only a stale or forged button can ask a site without video for one.
+    if kind is ExtractType.VIDEO and not registry.get(request.provider).supports_video:
+        kind = ExtractType.AUDIO
+    await repo.set_request_type(request.req_id, kind)
     await callback.answer()
 
-    if callback_data.kind is ExtractType.AUDIO:
+    if kind is ExtractType.AUDIO:
         await _ask_destination(callback, repo, worker, settings, request, ExtractType.AUDIO)
         return
     await _show_qualities(callback, repo, ytdlp, registry, request)

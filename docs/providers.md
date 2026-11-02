@@ -4,7 +4,7 @@ A provider is everything the system needs to know about one source site. It is
 deliberately small, because almost nothing downstream is site-specific:
 yt-dlp and ffmpeg do not care which site a URL points at.
 
-Currently shipped: **YouTube**, **TikTok**.
+Currently shipped: **YouTube**, **TikTok**, **SoundCloud** (audio only).
 
 ## What a provider owns
 
@@ -13,6 +13,7 @@ class Provider(ABC):
     name: str                      # slug, lowercase alphanumeric, used in cache keys
     label: str                     # display name
     supports_chapters: bool        # False means audio is always a single track
+    supports_video: bool           # False skips the Audio/Video question
     cache_audio: bool              # whether processed audio is worth keeping
     ytdlp_args: tuple[str, ...]    # extra flags for every call to this site
 
@@ -60,10 +61,20 @@ Two things are worth checking while writing one:
   cache directory name (`youtube-dQw4w9WgXcQ`), and the split is on the first
   hyphen. The base class enforces this at class-definition time.
 
+## Audio-only sites
+
+A provider with `supports_video = False` never shows the Audio/Video keyboard.
+Intake records the request as audio and goes straight to the destination step,
+or straight into the queue when no file server is configured. The type
+callback also coerces a video request for such a site to audio, since only a
+stale or forged button could send one.
+
 ## Ids that are not in the URL
 
 Some share links are pure redirects: `vm.tiktok.com/ZMhqAbCdE` tells you
-nothing about which video it points at.
+nothing about which video it points at. SoundCloud permalinks are the same in
+a different way: `soundcloud.com/<user>/<slug>` names the track, but yt-dlp
+reports a numeric id, so the slug pair is only a placeholder.
 
 Rather than resolving these with an HTTP call during intake, the provider
 returns `resolved=False` with the short code as a placeholder id. The pipeline
@@ -127,3 +138,22 @@ Photo (slideshow) posts have no yt-dlp extractor, but share the id namespace
 with videos, so they are rewritten onto the video path. That reaches the
 backing audio, which is what an audio request wants; a video request for one
 will fail with yt-dlp's own message.
+
+### SoundCloud
+
+Audio only, so the Audio/Video question is skipped. No chapters, so a track is
+always one MP3.
+
+Permalinks (`soundcloud.com/<user>/<slug>`, with an optional `/s-<token>`
+segment for private tracks) carry no numeric id, so the reference is
+unresolved and the cache key comes from the metadata fetch. The `?in=<set>`
+parameter a track opened from a playlist carries is stripped, as is anything
+else in the query. Profile pages, playlists (`/sets/`), and the site's own
+pages are rejected rather than handed to yt-dlp.
+
+`on.soundcloud.com/<code>` share links go through unchanged: yt-dlp's generic
+extractor follows the redirect and hands off to the SoundCloud one.
+`api.soundcloud.com/tracks/<id>` is the one form that carries the id itself.
+
+Public tracks need no cookies. A `cookies-soundcloud.txt` jar works the same
+way as for the other sites.

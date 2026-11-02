@@ -209,7 +209,7 @@ async def test_cookies_reports_one_line_per_site(
     settings: Any, replies: list[str], registry: ProviderRegistry
 ) -> None:
     await cmd_cookies(a_message(), settings, FakeYtdlp(), registry, is_admin=True)  # pyright: ignore[reportArgumentType]
-    assert replies[0] == "YouTube: none\nTikTok: none"
+    assert replies[0] == "YouTube: none\nTikTok: none\nSoundCloud: none"
 
 
 async def test_cookies_reports_size_and_age_but_never_contents(
