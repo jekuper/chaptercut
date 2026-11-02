@@ -37,3 +37,7 @@ Thumbs.db
 # local working documents
 CLAUDE.local.md
 CHAPTERCUT_SPEC.md
+
+# local VM tooling, see vm.ps1 help
+vm.ps1
+.vm_known_hosts
